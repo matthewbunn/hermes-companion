@@ -7,8 +7,8 @@ and operate your self-hosted Hermes from your phone.
 Hermes already exposes a rich dashboard REST API and an OpenAI-compatible chat
 gateway, but both are typically unauthenticated and meant for a desktop browser.
 Hermes Companion puts a **phone-native, password-gated face** over them, so you can
-safely use Hermes from an iPhone/Android home-screen app over your private network
-(e.g. a Tailscale tailnet or LAN).
+safely use Hermes from an iPhone/Android home-screen app over a private network you
+control.
 
 > It does **not** reimplement Hermes — it proxies Hermes' own API and gateway and
 > serves a mobile UI. Point it at any Hermes instance you control.
@@ -34,8 +34,8 @@ safely use Hermes from an iPhone/Android home-screen app over your private netwo
 - All upstream secrets (the gateway key, the dashboard token) are held **server-side**
   and injected by the proxy. The browser never sees them.
 - Intended to run **bound to loopback and exposed only over a private network**
-  (Tailscale `serve`, a reverse proxy, or a LAN you trust). Don't expose it to the
-  public internet without putting a TLS terminator and your own hardening in front.
+  (a reverse proxy, VPN, or a LAN you trust). Don't expose it to the public internet
+  without putting a TLS terminator and your own hardening in front.
 
 ## Quick start (Docker)
 
@@ -54,14 +54,13 @@ environment, and `docker compose up -d`.
 
 Browsers only grant microphone access and Web Push in a **secure context** (HTTPS or
 localhost). Over plain HTTP you still get text, photos, video and spoken replies, but
-not voice-note *recording* or push. Easiest path for a private setup is
-[Tailscale `serve`](https://tailscale.com/kb/1242/tailscale-serve):
+not voice-note *recording* or push.
 
-```bash
-# companion bound to 127.0.0.1:8410, published tailnet-only with a real cert:
-tailscale serve --bg --https=8443 http://127.0.0.1:8410
-# -> https://<your-node>.<tailnet>.ts.net:8443/
-```
+To enable them, serve the app over HTTPS with a certificate your phone trusts — put it
+behind any TLS-terminating reverse proxy or private tunnel you prefer. Keep the app
+itself bound to loopback (`COMPANION_BIND=127.0.0.1`) and let the proxy handle TLS and
+exposure. (If you serve it over plain HTTP on a private address instead, set
+`COMPANION_COOKIE_SECURE=0`.)
 
 ## Configuration
 

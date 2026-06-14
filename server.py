@@ -13,8 +13,8 @@ Design:
   * A background watcher polls status + cron health and pushes notifications
     on bad transitions (gateway down, platform disconnect, cron failure).
 
-Bound to loopback only; reached exclusively via `tailscale serve` (tailnet-only,
-trusted HTTPS). Not exposed to LAN or the internet.
+Intended to run bound to loopback behind a TLS-terminating reverse proxy on a
+private network; not exposed directly to the public internet.
 """
 from __future__ import annotations
 

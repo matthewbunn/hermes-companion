@@ -11,6 +11,6 @@ ENV COMPANION_DATA=/data \
     HERMES_DASH_URL=http://127.0.0.1:30433 \
     HERMES_GW_URL=http://127.0.0.1:30432
 EXPOSE 8410
-# Binds all interfaces: reached at the host LAN IP over the Tailscale subnet route
-# (encrypted by the tailnet); password-gated. Set host via COMPANION_BIND if needed.
+# Bind/port configurable via COMPANION_BIND / COMPANION_PORT. Default binds all
+# interfaces; set COMPANION_BIND=127.0.0.1 to keep it loopback-only behind a proxy.
 CMD ["sh", "-c", "uvicorn server:app --host ${COMPANION_BIND:-0.0.0.0} --port ${COMPANION_PORT:-8410} --no-access-log"]

@@ -1,0 +1,21 @@
+# secrets & runtime state — never commit
+.env
+*.env
+!.env.example
+data/
+*.vapid.json
+vapid.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# build artifacts
+*.tar
+hermes-companion-image.tar
+
+# os/editor
+.DS_Store
+*.swp

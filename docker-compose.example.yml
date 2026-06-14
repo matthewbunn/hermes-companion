@@ -1,0 +1,12 @@
+# Copy to docker-compose.yml and edit. Host networking lets the companion reach a
+# Hermes instance on the same host's loopback; adjust if Hermes is elsewhere.
+services:
+  hermes-companion:
+    build: .
+    image: hermes-companion:1
+    container_name: hermes-companion
+    network_mode: host
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data

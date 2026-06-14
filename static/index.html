@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+  <title>Hermes</title>
+  <meta name="theme-color" content="#0b0d12" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Hermes" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <link rel="icon" href="/icons/icon-192.png" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <!-- Login -->
+  <div id="login" class="login hidden">
+    <div class="login-card">
+      <div class="login-logo">⊛</div>
+      <h1>Hermes</h1>
+      <p class="muted">Enter your passphrase</p>
+      <input id="login-pw" type="password" inputmode="text" autocomplete="current-password" placeholder="Passphrase" />
+      <button id="login-btn">Unlock</button>
+      <div id="login-err" class="login-err"></div>
+    </div>
+  </div>
+
+  <!-- App -->
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <div class="topbar-title">
+        <span id="status-dot" class="dot"></span>
+        <span id="view-title">Hermes</span>
+      </div>
+      <button id="refresh-btn" class="icon-btn" title="Refresh">⟳</button>
+    </header>
+
+    <main id="view" class="view"></main>
+
+    <nav class="tabbar">
+      <button class="tab" data-view="chat"><span class="ti">✦</span><span>Chat</span></button>
+      <button class="tab" data-view="status"><span class="ti">◉</span><span>Status</span></button>
+      <button class="tab" data-view="ops"><span class="ti">⚙</span><span>Ops</span></button>
+      <button class="tab" data-view="settings"><span class="ti">⚒</span><span>Settings</span></button>
+      <button class="tab" data-view="more"><span class="ti">⋯</span><span>More</span></button>
+    </nav>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -135,6 +135,11 @@ function viewChat(v) {
   if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
     micBtn.classList.add('disabled'); micBtn.title = 'Voice recording needs HTTPS';
   }
+  // keyboard handling: hide tab bar while typing so the composer (and send button)
+  // stays visible above the keyboard; scroll the log to the latest message.
+  const scrollLog = () => { const l = $('#chat-log'); if (l) l.scrollTop = l.scrollHeight; };
+  ta.addEventListener('focus', () => { document.body.classList.add('kb-open'); setTimeout(scrollLog, 250); });
+  ta.addEventListener('blur', () => { document.body.classList.remove('kb-open'); });
   renderAttTray();
 }
 
@@ -749,19 +754,44 @@ async function enablePush() {
 }
 
 // ---------- Boot ----------
+// Keep the app sized to the *visible* area (above the iOS keyboard) so the
+// composer never hides behind it.
+function setupViewport() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const apply = () => {
+    document.documentElement.style.setProperty('--app-h', vv.height + 'px');
+    if (document.body.classList.contains('kb-open')) window.scrollTo(0, 0);
+  };
+  vv.addEventListener('resize', apply);
+  vv.addEventListener('scroll', apply);
+  apply();
+}
+
+let _booted = false;
 function boot() {
+  if (_booted) return; _booted = true;
   $$('.tab').forEach(t => t.addEventListener('click', () => setView(t.dataset.view)));
   $('#refresh-btn').addEventListener('click', () => setView(currentView));
+  setupViewport();
   setView('chat');
 }
 
 $('#login-btn').addEventListener('click', doLogin);
 $('#login-pw').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
 
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+  // when a new version takes over, reload once so updates apply automatically
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshing) return; refreshing = true; location.reload();
+  });
+}
 
-// Decide login vs app: probe a protected endpoint.
-(async () => {
-  try { await fetch('/__me', { credentials: 'same-origin' }).then(r => { if (r.status === 401) throw 0; }); showApp(); boot(); }
-  catch { showLogin(); }
-})();
+// Paint the cached shell IMMEDIATELY (no network), then verify auth in the
+// background — so the UI never waits on a slow request to appear.
+showApp(); boot();
+fetch('/__me', { credentials: 'same-origin' })
+  .then(r => { if (r.status === 401) showLogin(); })
+  .catch(() => {});

@@ -39,7 +39,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .login-err { color: var(--bad); min-height: 20px; margin-top: 10px; font-size: 14px; }
 
 /* ---- App shell ---- */
-.app { display: flex; flex-direction: column; height: 100%; }
+.app { display: flex; flex-direction: column; height: 100vh; height: var(--app-h, 100dvh); overflow: hidden; }
 .topbar { display: flex; align-items: center; justify-content: space-between;
   padding: calc(var(--safe-t) + 10px) 16px 10px; background: rgba(11,13,18,.85);
   backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); position: relative; z-index: 5; }
@@ -48,13 +48,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .dot.good { background: var(--good); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
 .icon-btn { background: var(--bg-elev); border: 1px solid var(--line); border-radius: 10px;
   width: 38px; height: 38px; font-size: 18px; }
-.view { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 16px;
-  padding-bottom: calc(var(--tabbar-h) + var(--safe-b) + 16px); }
+.view { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 16px; min-height: 0; }
 
-/* ---- Tab bar ---- */
-.tabbar { position: fixed; bottom: 0; left: 0; right: 0; height: calc(var(--tabbar-h) + var(--safe-b));
+/* ---- Tab bar (in normal flow at the bottom of the flex column) ---- */
+.tabbar { flex: none; height: calc(var(--tabbar-h) + var(--safe-b));
   padding-bottom: var(--safe-b); display: flex; background: rgba(15,18,26,.92);
   backdrop-filter: blur(16px); border-top: 1px solid var(--line); z-index: 10; }
+/* hide the tab bar while typing so the composer sits right above the keyboard */
+body.kb-open .tabbar { display: none; }
 .tab { flex: 1; background: none; border: 0; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 3px; color: var(--muted); font-size: 11px; }
 .tab .ti { font-size: 20px; line-height: 1; }
@@ -106,8 +107,10 @@ pre { background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
 .msg.bot p:first-child { margin-top: 0; } .msg.bot p:last-child { margin-bottom: 0; }
 .msg.bot pre { margin: 8px 0; }
 .msg.bot code { background: var(--bg-elev2); padding: 1px 5px; border-radius: 5px; font-size: .9em; }
-.composer { display: flex; gap: 8px; padding: 10px 12px calc(var(--tabbar-h) + var(--safe-b) + 10px);
+.composer { display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px; flex: none;
   background: rgba(15,18,26,.95); border-top: 1px solid var(--line); }
+/* a little breathing room from the home indicator when the tab bar is hidden (typing) */
+body.kb-open .composer { padding-bottom: max(10px, var(--safe-b)); }
 .composer textarea { resize: none; max-height: 120px; border-radius: 20px; flex: 1 1 auto; min-width: 0; width: auto; }
 .composer .send { width: 44px; height: 44px; flex: none; border-radius: 50%; border: 0;
   background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #07101f; font-size: 20px; }

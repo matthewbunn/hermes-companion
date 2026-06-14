@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content" />
   <title>Hermes</title>
   <meta name="theme-color" content="#0b0d12" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -27,8 +27,8 @@
     </div>
   </div>
 
-  <!-- App -->
-  <div id="app" class="app hidden">
+  <!-- App (visible immediately; login overlays only if the auth probe says so) -->
+  <div id="app" class="app">
     <header class="topbar">
       <div class="topbar-title">
         <span id="status-dot" class="dot"></span>

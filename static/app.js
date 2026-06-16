@@ -357,17 +357,45 @@ async function sendChat(voice) {
     if (r.status === 401) { showLogin(); return; }
     if (!r.ok) throw new Error('gateway ' + r.status);
     typing.remove();
-    const shell = el('div', { class: 'msg bot' }); shell.append(botText);
+    const shell = el('div', { class: 'msg bot' });
+    const toolSteps = el('div', { class: 'tool-steps' });  // shows the agent's tool calls live
+    shell.append(toolSteps, botText);
     log.append(shell);
+    const stepEls = {};
+    const handleTool = (p) => {
+      toolSteps.classList.add('show');
+      let s = stepEls[p.toolCallId];
+      if (!s) {
+        s = el('div', { class: 'tool-step running' },
+          el('span', { class: 'ts-emoji' }, p.emoji || '🔧'),
+          el('span', { class: 'ts-label' }, p.label || p.tool || 'tool'),
+          el('span', { class: 'ts-stat' }));
+        stepEls[p.toolCallId || ('s' + toolSteps.children.length)] = s;
+        toolSteps.append(s);
+      }
+      if (p.status === 'completed' || p.status === 'error') {
+        s.classList.remove('running');
+        s.classList.add(p.status === 'error' ? 'err' : 'done');
+      }
+      log.scrollTop = log.scrollHeight;
+    };
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = '';
+    let curEvent = 'message';
     while (true) {
       const { done, value } = await reader.read(); if (done) break;
       buf += dec.decode(value, { stream: true });
       const lines = buf.split('\n'); buf = lines.pop();
       for (const line of lines) {
-        const t = line.trim(); if (!t.startsWith('data:')) continue;
+        const t = line.trim();
+        if (t === '') { curEvent = 'message'; continue; }
+        if (t.startsWith('event:')) { curEvent = t.slice(6).trim(); continue; }
+        if (!t.startsWith('data:')) continue;
         const data = t.slice(5).trim(); if (data === '[DONE]') continue;
-        try { const j = JSON.parse(data); const d = j.choices?.[0]?.delta?.content; if (d) { acc += d; botText.innerHTML = mdLite(acc); log.scrollTop = log.scrollHeight; } } catch {}
+        if (curEvent === 'hermes.tool.progress') {
+          try { handleTool(JSON.parse(data)); } catch {}
+        } else {
+          try { const j = JSON.parse(data); const d = j.choices?.[0]?.delta?.content; if (d) { acc += d; botText.innerHTML = mdLite(acc); log.scrollTop = log.scrollHeight; } } catch {}
+        }
       }
     }
     if (acc) shell.append(speakBtn(acc));
@@ -609,41 +637,118 @@ function showResult(title, data) {
   body.append(el('div', { class: 'card' }, el('h2', {}, title), el('pre', {}, text)));
 }
 
-// ---------- SETTINGS ----------
-let setTab = 'models';
-async function viewSettings(v) {
-  const seg = el('div', { class: 'seg' });
-  ['models', 'skills', 'env', 'config', 'notify'].forEach(t => {
-    seg.append(el('button', { class: setTab === t ? 'active' : '', onclick: () => { setTab = t; setView('settings'); } },
-      ({ models: 'Models', skills: 'Skills', env: 'Env', config: 'Config', notify: 'Alerts' })[t]));
+// ---------- SETTINGS (menu -> detail panels) ----------
+let settingsDetail = null;
+const SETTINGS_CATS = [
+  ['models', '🧠', 'Models', 'Default + auxiliary routing', () => setModels],
+  ['tools', '🧰', 'Tools', 'Enable/disable toolsets', () => setTools],
+  ['skills', '✨', 'Skills', 'Toggle agent skills', () => setSkills],
+  ['mcp', '🔌', 'MCP servers', 'External tool servers', () => setMcp],
+  ['memory', '🧩', 'Memory', 'Long-term memory provider', () => setMemory],
+  ['channels', '📡', 'Channels', 'Messaging platforms', () => setChannels],
+  ['env', '🔑', 'Environment', 'Env vars & secrets', () => setEnv],
+  ['config', '📄', 'Config', 'Raw config.yaml', () => setConfig],
+  ['curator', '🗂️', 'Curator', 'Memory maintenance', () => setCurator],
+  ['notify', '🔔', 'Notifications', 'Push alerts', () => setNotify],
+];
+
+function viewSettings(v) {
+  const cat = SETTINGS_CATS.find(c => c[0] === settingsDetail);
+  if (cat) {
+    v.append(el('button', { class: 'btn', style: 'margin-bottom:12px', onclick: () => { settingsDetail = null; setView('settings'); } }, '‹ Settings'));
+    v.append(el('h2', { style: 'margin:0 0 12px; font-size:20px' }, cat[2]));
+    const body = el('div', {}); v.append(body); loading(body);
+    cat[4]()(body).catch(e => { body.innerHTML = ''; body.append(errCard(e)); });
+    return;
+  }
+  const list = el('div', { class: 'card' });
+  SETTINGS_CATS.forEach(([id, icon, name, desc]) => {
+    list.append(el('div', { class: 'menu-row', onclick: () => { settingsDetail = id; setView('settings'); } },
+      el('span', { class: 'mr-icon' }, icon),
+      el('div', { class: 'mr-body' }, el('div', { class: 'mr-name' }, name), el('div', { class: 'mr-desc' }, desc)),
+      el('span', { class: 'mr-chev' }, '›')));
   });
-  v.append(seg);
-  const body = el('div', {}); v.append(body); loading(body);  // spinner stays until data arrives
-  try {
-    if (setTab === 'models') await setModels(body);
-    else if (setTab === 'skills') await setSkills(body);
-    else if (setTab === 'env') await setEnv(body);
-    else if (setTab === 'config') await setConfig(body);
-    else await setNotify(body);
-  } catch (e) { body.innerHTML = ''; body.append(errCard(e)); }
+  v.append(list);
 }
 
+// A toggle switch that calls onToggle(newValue) then lets the caller re-render.
+function toggleSwitch(enabled, onToggle) {
+  const t = el('button', { class: 'toggle' + (enabled ? ' on' : '') });
+  t.addEventListener('click', async () => {
+    if (t.classList.contains('busy')) return;
+    t.classList.add('busy');
+    try { await onToggle(!enabled); } catch (e) { toast(e.message || 'failed', true); t.classList.remove('busy'); }
+  });
+  return t;
+}
+const reSettings = () => setView('settings');
+
 async function setModels(body) {
-  const info = await apiGET('/model/info').catch(() => ({}));
+  const [info, opts, aux] = await Promise.all([
+    apiGET('/model/info').catch(() => ({})),
+    apiGET('/model/options').catch(() => ({})),
+    apiGET('/model/auxiliary').catch(() => ({})),
+  ]);
   body.innerHTML = '';
-  body.append(dumpCard('Current model', info));
-  try {
-    const opts = await apiGET('/model/options');
-    const list = Array.isArray(opts) ? opts : (opts.options || opts.models || []);
-    if (list.length) {
-      const c = el('div', { class: 'card' }, el('h2', {}, 'Available models'));
-      list.slice(0, 60).forEach(m => {
-        const name = typeof m === 'string' ? m : (m.id || m.name);
-        c.append(el('div', { class: 'list-item' }, name));
-      });
-      body.append(c);
-    }
-  } catch {}
+  body.append(card('Default model', [
+    ['Model', info.model], ['Provider', info.provider],
+    ['Context', info.effective_context_length ? Math.round(info.effective_context_length / 1000) + 'k' : null],
+  ]));
+  if (aux.tasks && aux.tasks.length) {
+    const c = el('div', { class: 'card' }, el('h2', {}, `Auxiliary models (${aux.tasks.length})`));
+    aux.tasks.forEach(t => c.append(el('div', { class: 'row' },
+      el('span', { class: 'k' }, t.task), el('span', { class: 'v' }, t.model || '—'))));
+    body.append(c);
+  }
+  const provs = opts.providers || [];
+  if (provs.length) {
+    const c = el('div', { class: 'card' }, el('h2', {}, `Switch model — ${provs.length} providers`));
+    provs.forEach(p => {
+      const row = el('div', { class: 'menu-row', onclick: () => showProviderModels(p) },
+        el('div', { class: 'mr-body' }, el('div', { class: 'mr-name' }, (p.name || p.slug) + (p.is_current ? ' ✓' : '')),
+          el('div', { class: 'mr-desc' }, (p.total_models ?? (p.models || []).length) + ' models')),
+        el('span', { class: 'mr-chev' }, '›'));
+      c.append(row);
+    });
+    body.append(c);
+  }
+}
+function showProviderModels(p) {
+  const v = $('#view'); v.innerHTML = '';
+  v.append(el('button', { class: 'btn', style: 'margin-bottom:12px', onclick: reSettings }, '‹ Back'));
+  v.append(el('h2', { style: 'margin:0 0 10px' }, p.name || p.slug));
+  const models = (p.models || []).map(m => typeof m === 'string' ? m : (m.id || m.slug || m.name)).filter(Boolean);
+  const c = el('div', { class: 'card' });
+  const search = el('input', { placeholder: `Filter ${models.length} models…`, oninput: (e) => {
+    const q = e.target.value.toLowerCase();
+    $$('.mdl-row', c).forEach(r => r.style.display = r.dataset.m.includes(q) ? '' : 'none');
+  } });
+  v.append(el('label', { class: 'field' }, search));
+  models.slice(0, 300).forEach(id => {
+    c.append(el('div', { class: 'row mdl-row', 'data-m': id.toLowerCase() },
+      el('span', { class: 'k', style: 'color:var(--text);font-size:13px' }, id),
+      el('button', { class: 'pill', onclick: async () => {
+        if (!confirm('Set the default routing model to ' + id + '?')) return;
+        try { await apiPOST('/model/set', { scope: 'default', provider: p.slug, model: id }); toast('Default model set'); settingsDetail = 'models'; reSettings(); }
+        catch (e) { toast(e.message, true); }
+      } }, 'set')));
+  });
+  v.append(c);
+}
+
+async function setTools(body) {
+  const data = await apiGET('/tools/toolsets');
+  body.innerHTML = '';
+  const list = Array.isArray(data) ? data : (data.toolsets || []);
+  const c = el('div', { class: 'card' }, el('h2', {}, `Toolsets (${list.length})`));
+  list.forEach(ts => {
+    const sub = (ts.tools ? ts.tools.length : 0) + ' tools'
+      + (ts.available === false ? ' · unavailable' : '') + (ts.configured === false ? ' · not configured' : '');
+    c.append(el('div', { class: 'row' },
+      el('div', { class: 'mr-body' }, el('div', { class: 'mr-name' }, ts.label || ts.name), el('div', { class: 'mr-desc' }, sub)),
+      toggleSwitch(!!ts.enabled, async (val) => { await apiPUT('/tools/toolsets/' + encodeURIComponent(ts.name), { enabled: val }); toast((ts.label || ts.name) + (val ? ' enabled' : ' disabled')); reSettings(); })));
+  });
+  body.append(c);
 }
 
 async function setSkills(body) {
@@ -651,15 +756,68 @@ async function setSkills(body) {
   body.innerHTML = '';
   const skills = Array.isArray(data) ? data : (data.skills || []);
   const c = el('div', { class: 'card' }, el('h2', {}, `Skills (${skills.length})`));
+  const search = el('input', { placeholder: 'Filter skills…', oninput: (e) => {
+    const q = e.target.value.toLowerCase(); $$('.sk-row', c).forEach(r => r.style.display = r.dataset.n.includes(q) ? '' : 'none');
+  } });
+  c.append(el('label', { class: 'field' }, search));
   skills.forEach(s => {
     const name = s.name || s.id; const enabled = s.enabled ?? s.active ?? false;
-    const row = el('div', { class: 'row' },
-      el('span', { class: 'k', style: 'color:var(--text)' }, name),
-      el('button', { class: 'pill ' + (enabled ? 'good' : ''), onclick: async () => {
-        try { await apiPUT('/skills/toggle', { name, enabled: !enabled }); toast('Toggled ' + name); setView('settings'); }
-        catch (e) { toast(e.message, true); }
-      } }, enabled ? 'on' : 'off'));
-    c.append(row);
+    c.append(el('div', { class: 'row sk-row', 'data-n': String(name).toLowerCase() },
+      el('div', { class: 'mr-body' }, el('div', { class: 'mr-name', style: 'font-size:14px' }, name)),
+      toggleSwitch(!!enabled, async (val) => { await apiPUT('/skills/toggle', { name, enabled: val }); toast(name + (val ? ' on' : ' off')); reSettings(); })));
+  });
+  body.append(c);
+}
+
+async function setMcp(body) {
+  const data = await apiGET('/mcp/servers');
+  body.innerHTML = '';
+  const servers = data.servers || [];
+  const c = el('div', { class: 'card' }, el('h2', {}, `MCP servers (${servers.length})`));
+  if (!servers.length) c.append(el('div', { class: 'muted' }, 'No MCP servers configured'));
+  servers.forEach(s => {
+    c.append(el('div', { class: 'row' },
+      el('div', { class: 'mr-body' }, el('div', { class: 'mr-name' }, s.name), el('div', { class: 'mr-desc' }, (s.transport || '') + ' · ' + ((s.tools || []).length) + ' tools')),
+      toggleSwitch(!!s.enabled, async (val) => { await apiPUT('/mcp/servers/' + encodeURIComponent(s.name) + '/enabled', { enabled: val }); toast(s.name + (val ? ' enabled' : ' disabled')); reSettings(); })));
+    c.append(el('div', { class: 'btn-grid', style: 'margin:6px 0 4px' },
+      el('button', { class: 'btn', onclick: async () => { toast('Testing ' + s.name + '…'); try { const r = await apiPOST('/mcp/servers/' + encodeURIComponent(s.name) + '/test'); toast(r && r.ok === false ? 'Test failed' + (r.error ? ': ' + r.error : '') : 'Test OK'); } catch (e) { toast(e.message, true); } } }, 'Test'),
+      el('button', { class: 'btn bad', onclick: async () => { if (!confirm('Remove MCP server ' + s.name + '?')) return; try { await apiDEL('/mcp/servers/' + encodeURIComponent(s.name)); toast('Removed'); reSettings(); } catch (e) { toast(e.message, true); } } }, 'Remove')));
+  });
+  body.append(c);
+}
+
+async function setMemory(body) {
+  const data = await apiGET('/memory');
+  body.innerHTML = '';
+  body.append(card('Memory', [['Active provider', data.active]]));
+  const provs = data.providers || [];
+  const c = el('div', { class: 'card' }, el('h2', {}, `Providers (${provs.length})`));
+  provs.forEach(p => {
+    const cur = p.name === data.active;
+    c.append(el('div', { class: 'row' },
+      el('div', { class: 'mr-body' }, el('div', { class: 'mr-name' }, p.name + (cur ? ' ✓' : '')), el('div', { class: 'mr-desc' }, (p.description || '') + (p.configured === false ? ' · not configured' : ''))),
+      cur ? el('span', { class: 'pill good' }, 'active')
+        : el('button', { class: 'pill', onclick: async () => { if (!confirm('Switch memory provider to ' + p.name + '?')) return; try { await apiPUT('/memory/provider', { provider: p.name }); toast('Memory provider set'); reSettings(); } catch (e) { toast(e.message, true); } } }, 'use')));
+  });
+  body.append(c);
+  body.append(el('div', { class: 'card' }, el('h2', {}, 'Maintenance'),
+    el('button', { class: 'btn bad block', onclick: async () => { if (!confirm('Reset long-term memory? This can erase stored memories.')) return; try { await apiPOST('/memory/reset'); toast('Memory reset'); } catch (e) { toast(e.message, true); } } }, 'Reset memory')));
+}
+
+async function setChannels(body) {
+  const data = await apiGET('/messaging/platforms');
+  body.innerHTML = '';
+  const plats = data.platforms || [];
+  const search = el('input', { placeholder: `Filter ${plats.length} channels…`, oninput: (e) => {
+    const q = e.target.value.toLowerCase(); $$('.ch-row', body).forEach(r => r.style.display = r.dataset.n.includes(q) ? '' : 'none');
+  } });
+  body.append(el('label', { class: 'field' }, search));
+  const c = el('div', { class: 'card' });
+  plats.forEach(p => {
+    const sub = (p.state ? p.state : (p.configured ? 'configured' : 'not configured')) + (p.error_message ? ' · ' + p.error_message : '');
+    c.append(el('div', { class: 'row ch-row', 'data-n': (p.name + ' ' + p.id).toLowerCase() },
+      el('div', { class: 'mr-body' }, el('div', { class: 'mr-name', style: 'font-size:14px' }, p.name), el('div', { class: 'mr-desc' }, sub)),
+      toggleSwitch(!!p.enabled, async (val) => { await apiPUT('/messaging/platforms/' + encodeURIComponent(p.id), { enabled: val }); toast(p.name + (val ? ' enabled' : ' disabled')); reSettings(); })));
   });
   body.append(c);
 }
@@ -668,20 +826,28 @@ async function setEnv(body) {
   const data = await apiGET('/env');
   body.innerHTML = '';
   const names = Array.isArray(data) ? data : Object.keys(data || {});
+  // add / set a variable
+  const k = el('input', { placeholder: 'KEY', style: 'text-transform:uppercase' });
+  const val = el('input', { placeholder: 'value' });
+  body.append(el('div', { class: 'card' }, el('h2', {}, 'Set variable'),
+    el('label', { class: 'field' }, k), el('label', { class: 'field' }, val),
+    el('button', { class: 'btn primary block', onclick: async () => {
+      if (!k.value.trim()) return;
+      if (!confirm('Set ' + k.value + '? Hermes may need a restart to pick it up.')) return;
+      try { await apiPUT('/env', { key: k.value.trim(), value: val.value }); toast('Saved ' + k.value); reSettings(); } catch (e) { toast(e.message, true); }
+    } }, 'Save variable')));
   const c = el('div', { class: 'card' }, el('h2', {}, `Environment (${names.length})`));
   const search = el('input', { placeholder: 'Filter…', oninput: (e) => {
-    const q = e.target.value.toLowerCase();
-    $$('.env-row', c).forEach(r => r.style.display = r.dataset.name.includes(q) ? '' : 'none');
+    const q = e.target.value.toLowerCase(); $$('.env-row', c).forEach(r => r.style.display = r.dataset.name.includes(q) ? '' : 'none');
   } });
   c.append(el('label', { class: 'field' }, search));
   names.sort().forEach(name => {
-    const row = el('div', { class: 'row env-row', 'data-name': name.toLowerCase() },
+    c.append(el('div', { class: 'row env-row', 'data-name': name.toLowerCase() },
       el('span', { class: 'k', style: 'color:var(--text);font-size:13px' }, name),
       el('button', { class: 'pill', onclick: async (e) => {
         try { const r = await apiPOST('/env/reveal', { key: name }); e.target.textContent = (r.value ?? '(empty)'); e.target.style.color = 'var(--accent)'; }
         catch (err) { toast(err.message, true); }
-      } }, 'reveal'));
-    c.append(row);
+      } }, 'reveal')));
   });
   body.append(c);
 }
@@ -698,10 +864,29 @@ async function setConfig(body) {
     } }, 'Save config')));
 }
 
+async function setCurator(body) {
+  const d = await apiGET('/curator');
+  body.innerHTML = '';
+  body.append(card('Curator', [
+    ['Enabled', String(d.enabled)],
+    ['Interval', d.interval_hours ? d.interval_hours + 'h' : null],
+    ['Last run', d.last_run_at ? fmtTime(d.last_run_at) + ' (' + ago(d.last_run_at) + ')' : null],
+    ['Stale after', d.stale_after_days ? d.stale_after_days + 'd' : null],
+    ['Archive after', d.archive_after_days ? d.archive_after_days + 'd' : null],
+  ]));
+  const c = el('div', { class: 'card' }, el('h2', {}, 'Controls'));
+  c.append(el('div', { class: 'row' }, el('span', { class: 'k', style: 'color:var(--text)' }, 'Paused'),
+    toggleSwitch(!!d.paused, async (val) => { await apiPUT('/curator/paused', { paused: val }); toast(val ? 'Paused' : 'Resumed'); reSettings(); })));
+  c.append(el('button', { class: 'btn primary block', style: 'margin-top:10px', onclick: async () => {
+    toast('Running curator…'); try { const r = await apiPOST('/curator/run'); showResult('Curator run', r); } catch (e) { toast(e.message, true); }
+  } }, 'Run curator now'));
+  body.append(c);
+}
+
 async function setNotify(body) {
   body.innerHTML = '';
   const c = el('div', { class: 'card' }, el('h2', {}, 'Push notifications'),
-    el('p', { class: 'muted', style: 'margin-top:0' }, 'Get alerts when the gateway drops, a channel disconnects, or a cron fails.'));
+    el('p', { class: 'muted', style: 'margin-top:0' }, 'Get alerts when the gateway drops, a channel disconnects, or a cron fails. (Requires HTTPS.)'));
   c.append(el('button', { class: 'btn primary block', onclick: enablePush }, 'Enable on this device'));
   c.append(el('button', { class: 'btn block', style: 'margin-top:8px', onclick: async () => {
     try { const r = await fetch('/__push/test', { method: 'POST', credentials: 'same-origin' }); const j = await r.json(); toast(j.subs ? 'Sent to ' + j.subs + ' device(s)' : 'No devices subscribed'); }
@@ -783,7 +968,7 @@ function setupViewport() {
 let _booted = false;
 function boot() {
   if (_booted) return; _booted = true;
-  $$('.tab').forEach(t => t.addEventListener('click', () => setView(t.dataset.view)));
+  $$('.tab').forEach(t => t.addEventListener('click', () => { if (t.dataset.view === 'settings') settingsDetail = null; setView(t.dataset.view); }));
   $('#refresh-btn').addEventListener('click', () => setView(currentView));
   setupViewport();
   setView('chat');

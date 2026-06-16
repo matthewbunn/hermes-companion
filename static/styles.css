@@ -202,6 +202,13 @@ body.kb-open .composer { padding-bottom: max(10px, var(--safe-b)); }
 .bar-wrap { flex: 1; width: 100%; display: flex; align-items: flex-end; }
 .bar { width: 100%; background: linear-gradient(180deg, var(--accent), var(--accent2)); border-radius: 3px 3px 0 0; min-height: 2px; }
 .bar-lbl { font-size: 9px; color: var(--muted); margin-top: 3px; transform: rotate(-45deg); white-space: nowrap; }
+/* kanban */
+.kanban { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; -webkit-overflow-scrolling: touch; }
+.kan-col { flex: 0 0 240px; background: var(--bg-elev); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
+.kan-col-h { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 8px; }
+.kan-card { background: var(--bg-elev2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; }
+.kan-title { font-size: 14px; word-break: break-word; }
+.kan-meta { font-size: 11px; margin-top: 4px; }
 .seg { display: flex; background: var(--bg-elev2); border-radius: 10px; padding: 3px; margin-bottom: 14px; }
 .seg button { flex: 1; padding: 8px; border: 0; background: none; color: var(--muted); border-radius: 8px; font-size: 13px; font-weight: 600; }
 .seg button.active { background: var(--bg-elev); color: var(--text); }

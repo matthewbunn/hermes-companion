@@ -592,6 +592,7 @@ async function viewOps(v) {
 async function opsCrons(body) {
   const data = await apiGET('/cron/jobs');
   body.innerHTML = '';
+  body.append(el('button', { class: 'btn primary block', style: 'margin-bottom:12px', onclick: () => cronForm() }, '＋ New cron job'));
   const jobs = Array.isArray(data) ? data : (data.jobs || []);
   if (!jobs.length) { body.append(el('div', { class: 'empty' }, 'No cron jobs')); return; }
   for (const j of jobs) {
@@ -615,8 +616,34 @@ async function opsCrons(body) {
     if (paused) btns.append(el('button', { class: 'btn', onclick: () => actOps(`/cron/jobs/${id}/resume`, 'Resumed') }, 'Resume'));
     else btns.append(el('button', { class: 'btn', onclick: () => actOps(`/cron/jobs/${id}/pause`, 'Paused') }, 'Pause'));
     c.append(btns);
+    c.append(el('div', { class: 'btn-grid', style: 'margin-top:8px' },
+      el('button', { class: 'btn', onclick: () => cronForm(j) }, '✎ Edit'),
+      el('button', { class: 'btn bad', onclick: async () => { if (!confirm('Delete cron "' + (j.name || id) + '"?')) return; try { await apiDEL('/cron/jobs/' + id); toast('Deleted'); setView('ops'); } catch (e) { toast(e.message, true); } } }, 'Delete')));
     body.append(c);
   }
+}
+
+function cronForm(existing) {
+  const v = $('#view'); v.innerHTML = '';
+  v.append(el('button', { class: 'btn', style: 'margin-bottom:10px', onclick: () => setView('ops') }, '‹ Back'));
+  v.append(el('h2', { style: 'margin:0 0 12px' }, existing ? 'Edit cron job' : 'New cron job'));
+  const name = el('input', { placeholder: 'Name', value: existing?.name || '' });
+  const prompt = el('textarea', { rows: '4', placeholder: 'What should the agent do on each run?' }, existing?.prompt || '');
+  const expr = el('input', { placeholder: '0 9 * * 1', value: existing?.schedule?.expr || existing?.schedule_display || '' });
+  v.append(el('div', { class: 'card' },
+    el('label', { class: 'field' }, el('span', {}, 'Name'), name),
+    el('label', { class: 'field' }, el('span', {}, 'Prompt'), prompt),
+    el('label', { class: 'field' }, el('span', {}, 'Schedule (cron)'), expr),
+    el('div', { class: 'muted', style: 'font-size:12px;margin:-4px 0 12px' }, 'min hour day month weekday — e.g. "0 9 * * 1" = 9am Mondays'),
+    el('button', { class: 'btn primary block', onclick: async () => {
+      if (!prompt.value.trim() || !expr.value.trim()) { toast('Prompt and schedule are required', true); return; }
+      const payload = { name: name.value.trim() || undefined, prompt: prompt.value, schedule: { kind: 'cron', expr: expr.value.trim() } };
+      try {
+        if (existing) { const id = existing.id || existing.job_id || existing.name; await apiPUT('/cron/jobs/' + id, payload); }
+        else await apiPOST('/cron/jobs', payload);
+        toast('Saved'); setView('ops');
+      } catch (e) { toast(e.message, true); }
+    } }, existing ? 'Save changes' : 'Create job')));
 }
 
 async function actOps(path, okMsg) {
@@ -751,11 +778,76 @@ const SETTINGS_CATS = [
   ['mcp', '🔌', 'MCP servers', 'External tool servers', () => setMcp],
   ['memory', '🧩', 'Memory', 'Long-term memory provider', () => setMemory],
   ['channels', '📡', 'Channels', 'Messaging platforms', () => setChannels],
+  ['profiles', '🎭', 'Profiles', 'Switch agent profile & persona', () => setProfiles],
+  ['providers', '🔗', 'Connections', 'OAuth provider logins', () => setProviders],
   ['env', '🔑', 'Environment', 'Env vars & secrets', () => setEnv],
   ['config', '📄', 'Config', 'Raw config.yaml', () => setConfig],
   ['curator', '🗂️', 'Curator', 'Memory maintenance', () => setCurator],
   ['notify', '🔔', 'Notifications', 'Push alerts', () => setNotify],
 ];
+
+async function setProfiles(body) {
+  const [data, active] = await Promise.all([apiGET('/profiles'), apiGET('/profiles/active').catch(() => ({}))]);
+  body.innerHTML = '';
+  const profiles = data.profiles || (Array.isArray(data) ? data : []);
+  const cur = active.active || active.current;
+  const c = el('div', { class: 'card' }, el('h2', {}, `Profiles (${profiles.length})`));
+  profiles.forEach(p => {
+    const isCur = p.name === cur;
+    c.append(el('div', { class: 'row' },
+      el('div', { class: 'mr-body' }, el('div', { class: 'mr-name' }, p.name + (isCur ? ' ✓' : '')), el('div', { class: 'mr-desc' }, (p.description || (p.model ? p.model + ' · ' + p.provider : '')) + (p.skill_count != null ? ' · ' + p.skill_count + ' skills' : ''))),
+      isCur ? el('span', { class: 'pill good' }, 'active')
+        : el('button', { class: 'pill', onclick: async () => { try { await apiPOST('/profiles/active', { name: p.name }); toast('Switched to ' + p.name); reSettings(); } catch (e) { toast(e.message, true); } } }, 'use')));
+    c.append(el('div', { class: 'btn-grid', style: 'margin:6px 0 4px' },
+      el('button', { class: 'btn', onclick: () => editSoul(p.name) }, 'Edit persona')));
+  });
+  body.append(c);
+}
+async function editSoul(name) {
+  const v = $('#view'); v.innerHTML = '';
+  v.append(el('button', { class: 'btn', style: 'margin-bottom:10px', onclick: reSettings }, '‹ Back'));
+  v.append(el('h2', { style: 'margin:0 0 10px' }, name + ' · persona'));
+  const body = el('div', {}); v.append(body); loading(body);
+  try {
+    const soul = await apiGET('/profiles/' + encodeURIComponent(name) + '/soul');
+    body.innerHTML = '';
+    const text = typeof soul === 'string' ? soul : (soul.content || soul.soul || '');
+    const ta = el('textarea', { rows: '18', style: 'font-size:13px' }, text);
+    body.append(el('div', { class: 'card' }, ta,
+      el('button', { class: 'btn primary block', style: 'margin-top:10px', onclick: async () => {
+        if (!confirm('Save persona for ' + name + '?')) return;
+        try { await apiPUT('/profiles/' + encodeURIComponent(name) + '/soul', { content: ta.value }); toast('Saved'); } catch (e) { toast(e.message, true); }
+      } }, 'Save persona')));
+  } catch (e) { body.innerHTML = ''; body.append(errCard(e)); }
+}
+
+async function setProviders(body) {
+  const data = await apiGET('/providers/oauth');
+  body.innerHTML = '';
+  const provs = data.providers || (Array.isArray(data) ? data : []);
+  const c = el('div', { class: 'card' }, el('h2', {}, `Connections (${provs.length})`));
+  provs.forEach(p => {
+    const connected = (p.status === 'connected' || p.status === 'authorized' || p.connected);
+    c.append(el('div', { class: 'row' },
+      el('div', { class: 'mr-body' }, el('div', { class: 'mr-name' }, p.name || p.id), el('div', { class: 'mr-desc' }, (p.flow || '') + (p.status ? ' · ' + p.status : ''))),
+      connected ? el('button', { class: 'pill bad', onclick: async () => { if (!confirm('Disconnect ' + (p.name || p.id) + '?')) return; try { await apiDEL('/providers/oauth/' + encodeURIComponent(p.id)); toast('Disconnected'); reSettings(); } catch (e) { toast(e.message, true); } } }, 'disconnect')
+        : el('button', { class: 'pill', onclick: () => startOauth(p) }, 'connect')));
+  });
+  body.append(c);
+}
+async function startOauth(p) {
+  try {
+    const r = await apiPOST('/providers/oauth/' + encodeURIComponent(p.id) + '/start', {});
+    const url = r.url || r.auth_url || r.verification_uri || r.verification_url;
+    const code = r.user_code || r.code;
+    if (url) {
+      if (code) { try { await navigator.clipboard?.writeText(code); } catch {} alert('Open the link, then enter code: ' + code + ' (copied)'); }
+      window.open(url, '_blank');
+      toast('Complete sign-in in the opened tab');
+    } else if (p.cli_command) { alert('This provider connects via CLI on the server:\n\n' + p.cli_command); }
+    else toast('Started — check the server / docs', false);
+  } catch (e) { toast(e.message, true); }
+}
 
 function viewSettings(v) {
   const cat = SETTINGS_CATS.find(c => c[0] === settingsDetail);
@@ -872,6 +964,30 @@ async function setSkills(body) {
       toggleSwitch(!!enabled, async (val) => { await apiPUT('/skills/toggle', { name, enabled: val }); toast(name + (val ? ' on' : ' off')); reSettings(); })));
   });
   body.append(c);
+
+  // Skill Hub: search & install
+  const hub = el('div', { class: 'card' }, el('h2', {}, 'Skill Hub'));
+  const q = el('input', { placeholder: 'Search the hub…' });
+  const results = el('div', {});
+  const doSearch = async () => {
+    if (!q.value.trim()) return;
+    results.innerHTML = ''; results.append(el('div', { class: 'spinner' }));
+    try {
+      const r = await apiGET('/skills/hub/search?q=' + encodeURIComponent(q.value.trim()));
+      const items = (r && (r.results || r.skills || r.items)) || (Array.isArray(r) ? r : []);
+      results.innerHTML = '';
+      if (!items.length) { results.append(el('div', { class: 'muted' }, 'No results')); return; }
+      items.slice(0, 25).forEach(it => {
+        const ident = it.identifier || it.id || it.name;
+        results.append(el('div', { class: 'row' },
+          el('div', { class: 'mr-body' }, el('div', { class: 'mr-name', style: 'font-size:14px' }, it.name || ident), el('div', { class: 'mr-desc' }, (it.description || '').slice(0, 80))),
+          el('button', { class: 'pill', onclick: async () => { try { await apiPOST('/skills/hub/install', { identifier: ident }); toast('Installing ' + ident); } catch (e) { toast(e.message, true); } } }, 'install')));
+      });
+    } catch (e) { results.innerHTML = ''; results.append(el('div', { class: 'muted' }, 'Hub unavailable: ' + e.message)); }
+  };
+  q.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+  hub.append(el('label', { class: 'field' }, q), el('button', { class: 'btn block', onclick: doSearch }, 'Search'), results);
+  body.append(hub);
 }
 
 async function setMcp(body) {
@@ -889,6 +1005,23 @@ async function setMcp(body) {
       el('button', { class: 'btn bad', onclick: async () => { if (!confirm('Remove MCP server ' + s.name + '?')) return; try { await apiDEL('/mcp/servers/' + encodeURIComponent(s.name)); toast('Removed'); reSettings(); } catch (e) { toast(e.message, true); } } }, 'Remove')));
   });
   body.append(c);
+
+  // Catalog: browse & install
+  try {
+    const cat = await apiGET('/mcp/catalog');
+    const entries = cat.entries || (Array.isArray(cat) ? cat : []);
+    if (entries.length) {
+      const cc = el('div', { class: 'card' }, el('h2', {}, `Catalog (${entries.length})`));
+      entries.forEach(e2 => {
+        const installed = e2.installed;
+        cc.append(el('div', { class: 'row' },
+          el('div', { class: 'mr-body' }, el('div', { class: 'mr-name' }, e2.name), el('div', { class: 'mr-desc' }, (e2.description || '').slice(0, 80) + (e2.required_env && e2.required_env.length ? ' · needs: ' + e2.required_env.join(', ') : ''))),
+          installed ? el('span', { class: 'pill good' }, 'installed')
+            : el('button', { class: 'pill', onclick: async () => { if (!confirm('Install ' + e2.name + '?' + (e2.required_env && e2.required_env.length ? ' You may need to set: ' + e2.required_env.join(', ') : ''))) return; try { await apiPOST('/mcp/catalog/install', { name: e2.name, enable: true }); toast('Installing ' + e2.name); reSettings(); } catch (er) { toast(er.message, true); } } }, 'install')));
+      });
+      body.append(cc);
+    }
+  } catch {}
 }
 
 async function setMemory(body) {
@@ -1037,18 +1170,62 @@ async function viewMore(v) {
 
   const links = el('div', { class: 'card' }, el('h2', {}, 'More'));
   [
-    ['Kanban board', async () => { try { showResult('Kanban', await apiGET('/plugins/kanban/board')); } catch (e) { toast(e.message, true); } }],
-    ['Profiles', async () => { try { showResult('Profiles', await apiGET('/profiles')); } catch (e) { toast(e.message, true); } }],
-    ['Webhooks', async () => { try { showResult('Webhooks', await apiGET('/webhooks')); } catch (e) { toast(e.message, true); } }],
-    ['MCP servers', async () => { try { showResult('MCP servers', await apiGET('/mcp/servers')); } catch (e) { toast(e.message, true); } }],
-    ['Messaging platforms', async () => { try { showResult('Messaging', await apiGET('/messaging/platforms')); } catch (e) { toast(e.message, true); } }],
-    ['Achievements', async () => { try { showResult('Achievements', await apiGET('/plugins/hermes-achievements/achievements')); } catch (e) { toast(e.message, true); } }],
+    ['📋 Kanban board', openKanban],
+    ['🪝 Webhooks', async () => { try { showResult('Webhooks', await apiGET('/webhooks')); } catch (e) { toast(e.message, true); } }],
+    ['🏆 Achievements', async () => { try { showResult('Achievements', await apiGET('/plugins/hermes-achievements/achievements')); } catch (e) { toast(e.message, true); } }],
   ].forEach(([label, fn]) => links.append(el('button', { class: 'btn block', style: 'margin-bottom:8px', onclick: fn }, label)));
   v.append(links);
 
   v.append(el('button', { class: 'btn bad block', onclick: async () => {
     await fetch('/__logout', { method: 'POST', credentials: 'same-origin' }); showLogin();
   } }, 'Log out'));
+}
+
+// ---------- Kanban ----------
+async function openKanban() {
+  const v = $('#view'); v.innerHTML = '';
+  v.append(el('button', { class: 'btn', style: 'margin-bottom:10px', onclick: () => setView('more') }, '‹ Back'));
+  v.append(el('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px' },
+    el('h2', { style: 'margin:0' }, 'Kanban'),
+    el('button', { class: 'btn primary', onclick: kanbanNewTask }, '＋ Task')));
+  const wrap = el('div', {}); v.append(wrap); loading(wrap);
+  try {
+    const board = await apiGET('/plugins/kanban/board');
+    wrap.innerHTML = '';
+    const cols = board.columns || [];
+    const boardEl = el('div', { class: 'kanban' });
+    cols.forEach(col => {
+      const tasks = col.tasks || [];
+      const colEl = el('div', { class: 'kan-col' }, el('div', { class: 'kan-col-h' }, (col.name || '') + ' · ' + tasks.length));
+      tasks.forEach(t => colEl.append(el('div', { class: 'kan-card', onclick: () => kanbanTask(t.id || t.task_id) },
+        el('div', { class: 'kan-title' }, t.title || t.name || t.id),
+        el('div', { class: 'kan-meta muted' }, [t.assignee, t.priority].filter(Boolean).join(' · ')))));
+      if (!tasks.length) colEl.append(el('div', { class: 'muted', style: 'font-size:12px;padding:6px 0' }, '—'));
+      boardEl.append(colEl);
+    });
+    wrap.append(boardEl);
+  } catch (e) { wrap.innerHTML = ''; wrap.append(errCard(e)); }
+}
+function kanbanNewTask() {
+  const v = $('#view'); v.innerHTML = '';
+  v.append(el('button', { class: 'btn', style: 'margin-bottom:10px', onclick: openKanban }, '‹ Back'));
+  v.append(el('h2', { style: 'margin:0 0 12px' }, 'New task'));
+  const title = el('input', { placeholder: 'Title' });
+  const bodyi = el('textarea', { rows: '4', placeholder: 'What should the agent do?' });
+  const prio = el('select', {}, el('option', { value: '' }, 'Priority: normal'), el('option', { value: 'high' }, 'High'), el('option', { value: 'low' }, 'Low'));
+  v.append(el('div', { class: 'card' },
+    el('label', { class: 'field' }, el('span', {}, 'Title'), title),
+    el('label', { class: 'field' }, el('span', {}, 'Details'), bodyi),
+    el('label', { class: 'field' }, el('span', {}, 'Priority'), prio),
+    el('button', { class: 'btn primary block', onclick: async () => {
+      if (!title.value.trim()) { toast('Title required', true); return; }
+      try { await apiPOST('/plugins/kanban/tasks', { title: title.value.trim(), body: bodyi.value || undefined, priority: prio.value || undefined }); toast('Task created'); openKanban(); }
+      catch (e) { toast(e.message, true); }
+    } }, 'Create task')));
+}
+async function kanbanTask(id) {
+  if (!id) return;
+  try { showResult('Task', await apiGET('/plugins/kanban/tasks/' + encodeURIComponent(id))); } catch (e) { toast(e.message, true); }
 }
 
 // ---------- Push ----------

@@ -308,6 +308,34 @@ async def push_test():
     return {"ok": True, "subs": len(load_subs())}
 
 
+# Alert preferences (which events trigger a push)
+PREFS_FILE = DATA_DIR / "alert_prefs.json"
+DEFAULT_PREFS = {"gateway": True, "channels": True, "crons": True, "agent_messages": True}
+
+
+def load_prefs() -> dict:
+    try:
+        return {**DEFAULT_PREFS, **json.loads(PREFS_FILE.read_text())}
+    except Exception:
+        return dict(DEFAULT_PREFS)
+
+
+@app.get("/__push/prefs")
+async def get_prefs():
+    return load_prefs()
+
+
+@app.put("/__push/prefs")
+async def put_prefs(request: Request):
+    body = await request.json()
+    prefs = load_prefs()
+    for k in DEFAULT_PREFS:
+        if k in body:
+            prefs[k] = bool(body[k])
+    PREFS_FILE.write_text(json.dumps(prefs))
+    return prefs
+
+
 # ---------------------------------------------------------------------------
 # Background watcher: push alerts on bad transitions
 # ---------------------------------------------------------------------------
@@ -325,8 +353,10 @@ def _save_state(s: dict):
 async def watcher_loop():
     await asyncio.sleep(15)
     prev = _load_state()
+    cycle = 0
     while True:
         try:
+            prefs = load_prefs()
             alerts = []
             r = await client.get(f"{DASH_URL}/api/status", headers=dash_headers(), timeout=10)
             if r.status_code == 401:
@@ -335,39 +365,85 @@ async def watcher_loop():
             if r.status_code == 200:
                 st = r.json()
                 gw = st.get("gateway_state")
-                if prev.get("gateway_state") and prev["gateway_state"] != gw and gw != "running":
+                if prefs.get("gateway") and prev.get("gateway_state") and prev["gateway_state"] != gw and gw != "running":
                     alerts.append(("Gateway " + str(gw), "Hermes gateway is no longer running."))
                 for name, info in (st.get("gateway_platforms") or {}).items():
                     pstate = info.get("state")
                     pkey = f"plat_{name}"
-                    if prev.get(pkey) == "connected" and pstate != "connected":
+                    if prefs.get("channels") and prev.get(pkey) == "connected" and pstate != "connected":
                         alerts.append((f"{name} disconnected", info.get("error_message") or f"{name} is {pstate}."))
                     prev[pkey] = pstate
                 prev["gateway_state"] = gw
 
             # cron failures
-            try:
-                cr = await client.get(f"{DASH_URL}/api/cron/jobs", headers=dash_headers(), timeout=10)
-                if cr.status_code == 200:
-                    data = cr.json()
-                    jobs = data if isinstance(data, list) else data.get("jobs", [])
-                    for j in jobs:
-                        jid = j.get("id") or j.get("job_id") or j.get("name")
-                        status = (j.get("last_status") or j.get("last_run_status") or "").lower()
-                        run_at = j.get("last_run_at") or j.get("last_run")
-                        key = f"cron_{jid}"
-                        sig = f"{status}@{run_at}"
-                        if status and status not in ("ok", "success", "succeeded", "") and prev.get(key) != sig:
-                            alerts.append((f"Cron failed: {j.get('name', jid)}", f"Last run: {status}"))
-                        prev[key] = sig
-            except Exception:
-                pass
+            if prefs.get("crons"):
+                try:
+                    cr = await client.get(f"{DASH_URL}/api/cron/jobs", headers=dash_headers(), timeout=10)
+                    if cr.status_code == 200:
+                        data = cr.json()
+                        jobs = data if isinstance(data, list) else data.get("jobs", [])
+                        for j in jobs:
+                            jid = j.get("id") or j.get("job_id") or j.get("name")
+                            status = (j.get("last_status") or j.get("last_run_status") or "").lower()
+                            run_at = j.get("last_run_at") or j.get("last_run")
+                            key = f"cron_{jid}"
+                            sig = f"{status}@{run_at}"
+                            if status and status not in ("ok", "success", "succeeded", "") and prev.get(key) != sig:
+                                alerts.append((f"Cron failed: {j.get('name', jid)}", f"Last run: {status}"))
+                            prev[key] = sig
+                except Exception:
+                    pass
+
+            # new agent messages on channels — slower cadence (every 3rd cycle) + bounded
+            if prefs.get("agent_messages") and cycle % 3 == 0:
+                try:
+                    sr = await client.get(f"{DASH_URL}/api/sessions", headers=dash_headers(), timeout=12)
+                    if sr.status_code == 200:
+                        sd = sr.json()
+                        sessions = sd if isinstance(sd, list) else sd.get("sessions", [])
+                        seeded = prev.get("_sess_seeded")
+                        changed = []
+                        for s in sessions:
+                            sid = s.get("id") or s.get("session_id")
+                            src = s.get("source") or s.get("channel") or ""
+                            if not sid or src == "api_server":  # skip the app's own chats
+                                continue
+                            sig = str(s.get("updated_at") or s.get("last_active") or s.get("message_count"))
+                            mkey = f"sess_{sid}"
+                            if prev.get(mkey) != sig:
+                                changed.append((sid, src))
+                                prev[mkey] = sig
+                        for sid, src in changed[:6]:
+                            if not seeded:  # don't notify for pre-existing sessions on first run
+                                continue
+                            try:
+                                mr = await client.get(f"{DASH_URL}/api/sessions/{sid}/messages?limit=1",
+                                                      headers=dash_headers(), timeout=10)
+                                if mr.status_code != 200:
+                                    continue
+                                md = mr.json()
+                                msgs = md if isinstance(md, list) else md.get("messages", [])
+                                if not msgs:
+                                    continue
+                                last = msgs[-1]
+                                role = last.get("role") or last.get("author") or ""
+                                if role and role != "user":
+                                    content = last.get("content")
+                                    if not isinstance(content, str):
+                                        content = json.dumps(content)
+                                    alerts.append((f"Hermes · {src or 'message'}", (content or "").strip()[:140]))
+                            except Exception:
+                                pass
+                        prev["_sess_seeded"] = True
+                except Exception:
+                    pass
 
             for title, body in alerts:
                 await asyncio.to_thread(_send_push, {"title": title, "body": body, "tag": "alert"})
             _save_state(prev)
         except Exception:
             pass
+        cycle += 1
         await asyncio.sleep(WATCH_INTERVAL)
 
 

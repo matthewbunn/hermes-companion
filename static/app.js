@@ -1124,13 +1124,26 @@ async function setCurator(body) {
 async function setNotify(body) {
   body.innerHTML = '';
   const c = el('div', { class: 'card' }, el('h2', {}, 'Push notifications'),
-    el('p', { class: 'muted', style: 'margin-top:0' }, 'Get alerts when the gateway drops, a channel disconnects, or a cron fails. (Requires HTTPS.)'));
+    el('p', { class: 'muted', style: 'margin-top:0' }, 'Push requires HTTPS — enable it on each device.'));
   c.append(el('button', { class: 'btn primary block', onclick: enablePush }, 'Enable on this device'));
   c.append(el('button', { class: 'btn block', style: 'margin-top:8px', onclick: async () => {
     try { const r = await fetch('/__push/test', { method: 'POST', credentials: 'same-origin' }); const j = await r.json(); toast(j.subs ? 'Sent to ' + j.subs + ' device(s)' : 'No devices subscribed'); }
     catch (e) { toast('failed', true); }
   } }, 'Send test notification'));
   body.append(c);
+  // alert preferences
+  try {
+    const prefs = await (await fetch('/__push/prefs', { credentials: 'same-origin' })).json();
+    const labels = { gateway: 'Gateway goes down', channels: 'Channel disconnects', crons: 'Cron job failures', agent_messages: 'New agent messages (Telegram, etc.)' };
+    const pc = el('div', { class: 'card' }, el('h2', {}, 'Alert types'));
+    Object.keys(labels).forEach(k => pc.append(el('div', { class: 'row' },
+      el('span', { class: 'k', style: 'color:var(--text)' }, labels[k]),
+      toggleSwitch(!!prefs[k], async (val) => {
+        await fetch('/__push/prefs', { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ [k]: val }) });
+        toast('Saved'); reSettings();
+      }))));
+    body.append(pc);
+  } catch {}
 }
 
 // ---------- MORE ----------

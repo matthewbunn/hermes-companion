@@ -133,6 +133,14 @@ function errCard(e) { return el('div', { class: 'card' }, el('div', { class: 'mu
 // message shape: { role, content (API: string|parts[]), media:[{kind,url,transcript}] }
 const chatState = { messages: [], streaming: false, atts: [], rec: null, abort: null, autoSpeak: false };
 try { chatState.autoSpeak = localStorage.getItem('hc_autospeak') === '1'; } catch {}
+// Persist the current conversation (text only — keeps it light) so it survives reloads.
+function saveChat() {
+  try { localStorage.setItem('hc_chat', JSON.stringify(chatState.messages.slice(-80).map(m => ({ role: m.role, content: msgText(m) })))); } catch {}
+}
+function loadChat() {
+  try { const s = localStorage.getItem('hc_chat'); if (s) { const m = JSON.parse(s); if (Array.isArray(m)) chatState.messages = m; } } catch {}
+}
+function newChat() { chatState.messages = []; saveChat(); setView('chat'); }
 const TEXT_FILE_RE = /\.(txt|md|markdown|csv|tsv|json|ya?ml|log|py|js|ts|jsx|tsx|html|css|scss|sh|bash|c|cpp|cc|h|hpp|java|go|rs|rb|php|sql|xml|toml|ini|conf|env|kt|swift|r|lua|pl)$/i;
 
 function viewChat(v) {
@@ -153,6 +161,8 @@ function viewChat(v) {
   log.scrollTop = log.scrollHeight;
   if (!chatState.messages.length)
     log.append(el('div', { class: 'empty' }, 'Talk to Hermes. Send text, photos, video, files or a voice note.'));
+  else
+    log.prepend(el('div', { class: 'newchat-bar' }, el('button', { class: 'act-btn', onclick: newChat }, '＋ New chat')));
 
   log.addEventListener('click', (e) => {
     const b = e.target.closest('.code-copy');
@@ -476,6 +486,7 @@ async function sendChat(opts = {}) {
       if (shell) shell.append(msgActions(am));
       if (chatState.autoSpeak && !aborted) playTTS(acc);
     } else if (shell) { shell.remove(); }
+    saveChat();
     log.scrollTop = log.scrollHeight;
   }
 }
@@ -701,6 +712,18 @@ async function openSession(id, s) {
   const body = $('#view'); body.innerHTML = '';
   body.append(el('button', { class: 'btn', onclick: () => setView('ops') }, '‹ Back'));
   const head = el('div', { class: 'card' }, el('h2', {}, s.title || s.name || 'Session'));
+  head.append(el('button', { class: 'btn primary block', style: 'margin-bottom:8px', onclick: async () => {
+    try {
+      const d = await apiGET('/sessions/' + id + '/messages');
+      const ms = Array.isArray(d) ? d : (d.messages || []);
+      chatState.messages = ms.map(m => ({
+        role: ((m.role || m.author) === 'user') ? 'user' : 'assistant',
+        content: typeof m.content === 'string' ? m.content
+          : (Array.isArray(m.content) ? m.content.filter(p => p.type === 'text').map(p => p.text).join('\n') : JSON.stringify(m.content)),
+      })).filter(m => m.content);
+      saveChat(); setView('chat'); toast('Loaded into chat — replies continue in a new thread');
+    } catch (e) { toast(e.message, true); }
+  } }, '↩ Resume in chat'));
   head.append(el('button', { class: 'btn bad block', onclick: async () => { if (confirm('Delete this session?')) { await apiDEL('/sessions/' + id); toast('Deleted'); setView('ops'); } } }, 'Delete session'));
   body.append(head);
   loading(body);
@@ -1307,6 +1330,7 @@ function boot() {
   $$('.tab').forEach(t => t.addEventListener('click', () => { if (t.dataset.view === 'settings') settingsDetail = null; setView(t.dataset.view); }));
   $('#refresh-btn').addEventListener('click', () => setView(currentView));
   setupViewport();
+  loadChat();   // restore the last conversation from this device
   // app-shortcut deep links (?view=) and share-target (?text/title/url)
   const params = new URLSearchParams(location.search);
   const want = params.get('view');

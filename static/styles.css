@@ -219,3 +219,4 @@ body.kb-open .composer { padding-bottom: max(10px, var(--safe-b)); }
 .seg { display: flex; background: var(--bg-elev2); border-radius: 10px; padding: 3px; margin-bottom: 14px; }
 .seg button { flex: 1; padding: 8px; border: 0; background: none; color: var(--muted); border-radius: 8px; font-size: 13px; font-weight: 600; }
 .seg button.active { background: var(--bg-elev); color: var(--text); }
+.newchat-bar { text-align: center; padding: 6px 0 10px; }

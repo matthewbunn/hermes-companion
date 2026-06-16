@@ -135,11 +135,10 @@ function viewChat(v) {
   if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
     micBtn.classList.add('disabled'); micBtn.title = 'Voice recording needs HTTPS';
   }
-  // keyboard handling: hide tab bar while typing so the composer (and send button)
-  // stays visible above the keyboard; scroll the log to the latest message.
-  const scrollLog = () => { const l = $('#chat-log'); if (l) l.scrollTop = l.scrollHeight; };
-  ta.addEventListener('focus', () => { document.body.classList.add('kb-open'); setTimeout(scrollLog, 250); });
-  ta.addEventListener('blur', () => { document.body.classList.remove('kb-open'); });
+  // On focus, scroll to the latest message. The tab bar is hidden ONLY when the
+  // keyboard actually opens (handled by setupViewport via visualViewport), so the
+  // nav bar never vanishes on desktop where focusing brings up no keyboard.
+  ta.addEventListener('focus', () => setTimeout(() => { const l = $('#chat-log'); if (l) l.scrollTop = l.scrollHeight; }, 300));
   renderAttTray();
 }
 
@@ -471,9 +470,8 @@ async function viewOps(v) {
       ({ crons: 'Crons', gateway: 'Gateway', sessions: 'Sessions', maint: 'Maint' })[t]));
   });
   v.append(seg);
-  const body = el('div', {}); v.append(body); loading(body);
+  const body = el('div', {}); v.append(body); loading(body);  // spinner stays until data arrives
   try {
-    body.innerHTML = '';
     if (opsTab === 'crons') await opsCrons(body);
     else if (opsTab === 'gateway') await opsGateway(body);
     else if (opsTab === 'sessions') await opsSessions(body);
@@ -483,6 +481,7 @@ async function viewOps(v) {
 
 async function opsCrons(body) {
   const data = await apiGET('/cron/jobs');
+  body.innerHTML = '';
   const jobs = Array.isArray(data) ? data : (data.jobs || []);
   if (!jobs.length) { body.append(el('div', { class: 'empty' }, 'No cron jobs')); return; }
   for (const j of jobs) {
@@ -517,6 +516,7 @@ async function actOps(path, okMsg) {
 
 async function opsGateway(body) {
   const st = await apiGET('/status').catch(() => ({}));
+  body.innerHTML = '';
   body.append(card('Gateway', [['State', st.gateway_state], ['PID', st.gateway_pid]]));
   const g = el('div', { class: 'btn-grid' },
     el('button', { class: 'btn primary', onclick: () => confirmAct('/gateway/restart', 'Restart gateway?', 'Restarting') }, '⟳ Restart'),
@@ -541,6 +541,7 @@ async function confirmAct(path, q, okMsg) {
 
 async function opsSessions(body) {
   const data = await apiGET('/sessions');
+  body.innerHTML = '';
   const sessions = Array.isArray(data) ? data : (data.sessions || data.items || []);
   body.append(el('div', { class: 'btn-grid' },
     el('button', { class: 'btn', onclick: async () => { try { const c = await apiGET('/sessions/empty/count'); if (confirm(`Delete ${c.count ?? c} empty sessions?`)) { await apiDEL('/sessions/empty'); toast('Pruned'); setView('ops'); } } catch (e) { toast(e.message, true); } } }, 'Prune empty'),
@@ -579,6 +580,7 @@ async function openSession(id, s) {
 }
 
 async function opsMaint(body) {
+  body.innerHTML = '';
   const ops = [
     ['/ops/doctor', 'Run Doctor', 'Diagnostics'],
     ['/ops/backup', 'Run Backup', 'Backup config + state'],
@@ -616,9 +618,8 @@ async function viewSettings(v) {
       ({ models: 'Models', skills: 'Skills', env: 'Env', config: 'Config', notify: 'Alerts' })[t]));
   });
   v.append(seg);
-  const body = el('div', {}); v.append(body); loading(body);
+  const body = el('div', {}); v.append(body); loading(body);  // spinner stays until data arrives
   try {
-    body.innerHTML = '';
     if (setTab === 'models') await setModels(body);
     else if (setTab === 'skills') await setSkills(body);
     else if (setTab === 'env') await setEnv(body);
@@ -629,6 +630,7 @@ async function viewSettings(v) {
 
 async function setModels(body) {
   const info = await apiGET('/model/info').catch(() => ({}));
+  body.innerHTML = '';
   body.append(dumpCard('Current model', info));
   try {
     const opts = await apiGET('/model/options');
@@ -646,6 +648,7 @@ async function setModels(body) {
 
 async function setSkills(body) {
   const data = await apiGET('/skills');
+  body.innerHTML = '';
   const skills = Array.isArray(data) ? data : (data.skills || []);
   const c = el('div', { class: 'card' }, el('h2', {}, `Skills (${skills.length})`));
   skills.forEach(s => {
@@ -663,6 +666,7 @@ async function setSkills(body) {
 
 async function setEnv(body) {
   const data = await apiGET('/env');
+  body.innerHTML = '';
   const names = Array.isArray(data) ? data : Object.keys(data || {});
   const c = el('div', { class: 'card' }, el('h2', {}, `Environment (${names.length})`));
   const search = el('input', { placeholder: 'Filter…', oninput: (e) => {
@@ -684,6 +688,7 @@ async function setEnv(body) {
 
 async function setConfig(body) {
   const raw = await apiGET('/config/raw');
+  body.innerHTML = '';
   const text = typeof raw === 'string' ? raw : (raw.content || raw.raw || JSON.stringify(raw, null, 2));
   const ta = el('textarea', { rows: '20', style: 'font-family:monospace;font-size:12px' }, text);
   body.append(el('div', { class: 'card' }, el('h2', {}, 'config.yaml (raw)'), ta,
@@ -694,6 +699,7 @@ async function setConfig(body) {
 }
 
 async function setNotify(body) {
+  body.innerHTML = '';
   const c = el('div', { class: 'card' }, el('h2', {}, 'Push notifications'),
     el('p', { class: 'muted', style: 'margin-top:0' }, 'Get alerts when the gateway drops, a channel disconnects, or a cron fails.'));
   c.append(el('button', { class: 'btn primary block', onclick: enablePush }, 'Enable on this device'));
@@ -708,9 +714,9 @@ async function setNotify(body) {
 async function viewMore(v) {
   loading(v);
   try {
-    v.innerHTML = '';
     // usage analytics
     const usage = await apiGET('/analytics/usage').catch(() => null);
+    v.innerHTML = '';
     if (usage) v.append(dumpCard('Usage', usage));
     // session stats
     const ss = await apiGET('/sessions/stats').catch(() => null);
@@ -759,9 +765,15 @@ async function enablePush() {
 function setupViewport() {
   const vv = window.visualViewport;
   if (!vv) return;
+  let baseH = 0;
   const apply = () => {
+    baseH = Math.max(baseH, vv.height);
     document.documentElement.style.setProperty('--app-h', vv.height + 'px');
-    if (document.body.classList.contains('kb-open')) window.scrollTo(0, 0);
+    // The on-screen keyboard is open only when the visible viewport is much
+    // shorter than the tallest we've seen — NOT merely because an input is focused.
+    const kbOpen = (baseH - vv.height) > 150;
+    document.body.classList.toggle('kb-open', kbOpen);
+    if (kbOpen) { const l = $('#chat-log'); if (l) l.scrollTop = l.scrollHeight; window.scrollTo(0, 0); }
   };
   vv.addEventListener('resize', apply);
   vv.addEventListener('scroll', apply);
@@ -793,5 +805,9 @@ if ('serviceWorker' in navigator) {
 // background — so the UI never waits on a slow request to appear.
 showApp(); boot();
 fetch('/__me', { credentials: 'same-origin' })
-  .then(r => { if (r.status === 401) showLogin(); })
+  .then(r => {
+    if (r.status === 401) { showLogin(); return; }
+    // set the header status dot without needing to open the Status tab
+    apiGET('/status').then(st => setStatusDot(st?.gateway_state === 'running' ? 'good' : 'bad')).catch(() => {});
+  })
   .catch(() => {});

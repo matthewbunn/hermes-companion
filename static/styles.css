@@ -163,6 +163,31 @@ body.kb-open .composer { padding-bottom: max(10px, var(--safe-b)); }
 .toggle::after { content: ''; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; transition: left .15s; }
 .toggle.on::after { left: 21px; }
 .toggle.busy { opacity: .5; }
+/* message actions */
+.msg-actions { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.msg.user .msg-actions { justify-content: flex-end; }
+.act-btn { background: none; border: 1px solid var(--line); color: var(--muted); font-size: 12px;
+  padding: 3px 9px; border-radius: 8px; }
+.act-btn:active { background: var(--bg-elev2); }
+.msg.user { display: flex; flex-direction: column; align-items: flex-end; }
+/* code blocks with copy */
+.codeblock { position: relative; margin: 8px 0; }
+.codeblock .code-copy { position: absolute; top: 6px; right: 6px; z-index: 1; font-size: 11px;
+  background: var(--bg-elev2); border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 2px 8px; }
+.codeblock pre { margin: 0; }
+/* tables */
+.bot-text table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; display: block; overflow-x: auto; }
+.bot-text th, .bot-text td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; }
+.bot-text th { background: var(--bg-elev2); }
+/* composer button states */
+.comp-btn.active { color: var(--accent); }
+.send.stop { background: var(--bad); }
+/* doc attachments */
+.att-chip.doc { width: auto; max-width: 150px; height: 60px; padding: 0 8px; display: flex; align-items: center; }
+.att-doc { display: flex; align-items: center; gap: 6px; font-size: 12px; overflow: hidden; }
+.att-doc-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc-chip { display: inline-block; background: var(--bg-elev2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 6px 10px; font-size: 13px; margin-bottom: 6px; }
 .seg { display: flex; background: var(--bg-elev2); border-radius: 10px; padding: 3px; margin-bottom: 14px; }
 .seg button { flex: 1; padding: 8px; border: 0; background: none; color: var(--muted); border-radius: 8px; font-size: 13px; font-weight: 600; }
 .seg button.active { background: var(--bg-elev); color: var(--text); }

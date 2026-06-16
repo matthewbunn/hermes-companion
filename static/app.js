@@ -76,16 +76,38 @@ function mdLite(s) {
   const blocks = s.split(/```/);
   let out = '';
   blocks.forEach((b, i) => {
-    if (i % 2) { out += '<pre>' + esc(b.replace(/^[a-z]*\n/i, '')) + '</pre>'; return; }
-    let t = esc(b)
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/(^|\s)\*([^*]+)\*/g, '$1<em>$2</em>')
-      .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-      .replace(/\n/g, '<br>');
-    out += t;
+    if (i % 2) {
+      const body = esc(b.replace(/^[a-z0-9+#.-]*\n/i, ''));
+      out += '<div class="codeblock"><button class="code-copy" type="button">Copy</button><pre>' + body + '</pre></div>';
+      return;
+    }
+    out += mdBlock(esc(b));
   });
   return out;
+}
+function mdInline(t) {
+  return t
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|\s)\*([^*]+)\*/g, '$1<em>$2</em>')
+    .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+function mdBlock(escaped) {
+  const lines = escaped.split('\n');
+  const splitRow = (l) => l.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim());
+  let html = ''; let i = 0;
+  while (i < lines.length) {
+    const next = lines[i + 1];
+    if (lines[i].includes('|') && next && next.includes('-') && /^[\s:|-]+$/.test(next)) {
+      const header = splitRow(lines[i]); i += 2; const rows = [];
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) { rows.push(splitRow(lines[i])); i++; }
+      html += '<table><thead><tr>' + header.map(h => '<th>' + mdInline(h) + '</th>').join('') + '</tr></thead><tbody>'
+        + rows.map(r => '<tr>' + r.map(c => '<td>' + mdInline(c) + '</td>').join('') + '</tr>').join('') + '</tbody></table>';
+    } else {
+      html += mdInline(lines[i]); if (i < lines.length - 1) html += '<br>'; i++;
+    }
+  }
+  return html;
 }
 
 // ---------- View routing ----------
@@ -106,32 +128,45 @@ function errCard(e) { return el('div', { class: 'card' }, el('div', { class: 'mu
 
 // ---------- CHAT (multimodal: text, images, video frames, voice notes, TTS) ----------
 // message shape: { role, content (API: string|parts[]), media:[{kind,url,transcript}] }
-const chatState = { messages: [], streaming: false, atts: [], rec: null };
+const chatState = { messages: [], streaming: false, atts: [], rec: null, abort: null, autoSpeak: false };
+try { chatState.autoSpeak = localStorage.getItem('hc_autospeak') === '1'; } catch {}
+const TEXT_FILE_RE = /\.(txt|md|markdown|csv|tsv|json|ya?ml|log|py|js|ts|jsx|tsx|html|css|scss|sh|bash|c|cpp|cc|h|hpp|java|go|rs|rb|php|sql|xml|toml|ini|conf|env|kt|swift|r|lua|pl)$/i;
 
 function viewChat(v) {
   const wrap = el('div', { class: 'chat' });
   const log = el('div', { class: 'chat-log', id: 'chat-log' });
   const tray = el('div', { class: 'att-tray', id: 'att-tray' });
-  const fileInput = el('input', { type: 'file', accept: 'image/*,video/*', multiple: '', id: 'att-file', style: 'display:none' });
-  const attBtn = el('button', { class: 'comp-btn', id: 'att-btn', title: 'Attach photo/video' }, '＋');
+  const fileInput = el('input', { type: 'file', accept: 'image/*,video/*,text/*,.txt,.md,.markdown,.csv,.tsv,.json,.yaml,.yml,.log,.py,.js,.ts,.html,.css,.sh,.c,.cpp,.h,.java,.go,.rs,.rb,.php,.sql,.xml,.toml,.ini,.conf,.env', multiple: '', id: 'att-file', style: 'display:none' });
+  const attBtn = el('button', { class: 'comp-btn', id: 'att-btn', title: 'Attach photo / video / file' }, '＋');
   const micBtn = el('button', { class: 'comp-btn', id: 'mic-btn', title: 'Voice note' }, '🎤');
+  const spkBtn = el('button', { class: 'comp-btn' + (chatState.autoSpeak ? ' active' : ''), id: 'spk-btn', title: 'Speak replies aloud' }, chatState.autoSpeak ? '🔊' : '🔈');
   const ta = el('textarea', { id: 'chat-input', rows: '1', placeholder: 'Message Hermes…', enterkeyhint: 'send' });
-  const send = el('button', { class: 'send', id: 'chat-send' }, '↑');
-  const composer = el('div', { class: 'composer' }, attBtn, micBtn, ta, send);
+  const send = el('button', { class: 'send' + (chatState.streaming ? ' stop' : ''), id: 'chat-send' }, chatState.streaming ? '■' : '↑');
+  const composer = el('div', { class: 'composer' }, attBtn, micBtn, spkBtn, ta, send);
   wrap.append(log, tray, composer, fileInput);
   v.append(wrap);
 
   chatState.messages.forEach(m => log.append(renderMessage(m)));
   log.scrollTop = log.scrollHeight;
   if (!chatState.messages.length)
-    log.append(el('div', { class: 'empty' }, 'Talk to Hermes. Send text, photos, video or a voice note.'));
+    log.append(el('div', { class: 'empty' }, 'Talk to Hermes. Send text, photos, video, files or a voice note.'));
 
+  log.addEventListener('click', (e) => {
+    const b = e.target.closest('.code-copy');
+    if (b) { const pre = b.parentElement.querySelector('pre'); navigator.clipboard?.writeText(pre.textContent); b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1200); }
+  });
   ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; });
   ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
-  send.addEventListener('click', sendChat);
+  send.addEventListener('click', () => { if (chatState.streaming) chatState.abort?.abort(); else sendChat(); });
   attBtn.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', onFilesPicked);
   micBtn.addEventListener('click', toggleRecord);
+  spkBtn.addEventListener('click', () => {
+    chatState.autoSpeak = !chatState.autoSpeak;
+    try { localStorage.setItem('hc_autospeak', chatState.autoSpeak ? '1' : ''); } catch {}
+    spkBtn.classList.toggle('active', chatState.autoSpeak); spkBtn.textContent = chatState.autoSpeak ? '🔊' : '🔈';
+    toast(chatState.autoSpeak ? 'Replies will be spoken aloud' : 'Auto-speak off');
+  });
   if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
     micBtn.classList.add('disabled'); micBtn.title = 'Voice recording needs HTTPS';
   }
@@ -221,6 +256,13 @@ async function onFilesPicked(e) {
       const { thumb, frames } = await sampleVideo(f);
       if (frames.length) chatState.atts.push({ kind: 'video', url: thumb, frames });
       else toast('Could not read video', true);
+    } else if (f.type.startsWith('text/') || f.type === 'application/json' || TEXT_FILE_RE.test(f.name)) {
+      try { const t = await f.text(); chatState.atts.push({ kind: 'doc', name: f.name, text: t.slice(0, 100000) }); }
+      catch { toast('Could not read ' + f.name, true); }
+    } else if (f.type === 'application/pdf') {
+      toast('PDF text isn’t extracted yet — paste the text or send a screenshot', true);
+    } else {
+      toast('Unsupported file: ' + f.name, true);
     }
   }
   renderAttTray();
@@ -231,8 +273,11 @@ function renderAttTray() {
   tray.innerHTML = '';
   tray.style.display = chatState.atts.length ? 'flex' : 'none';
   chatState.atts.forEach((a, i) => {
-    const chip = el('div', { class: 'att-chip' },
-      el('img', { src: a.url }),
+    const inner = a.kind === 'doc'
+      ? el('div', { class: 'att-doc' }, el('span', {}, '📄'), el('span', { class: 'att-doc-name' }, a.name))
+      : el('img', { src: a.url });
+    const chip = el('div', { class: 'att-chip' + (a.kind === 'doc' ? ' doc' : '') },
+      inner,
       a.kind === 'video' ? el('span', { class: 'att-badge' }, '▶') : null,
       el('button', { class: 'att-x', onclick: () => { chatState.atts.splice(i, 1); renderAttTray(); } }, '×'));
     tray.append(chip);
@@ -271,14 +316,45 @@ async function toggleRecord() {
 }
 
 // ----- rendering -----
+function msgText(m) {
+  return typeof m.content === 'string' ? m.content
+    : (m.content || []).filter(p => p.type === 'text').map(p => p.text).join('\n');
+}
+async function playTTS(text, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try { const r = await apiPOST('/audio/speak', { text }); if (r.data_url) new Audio(r.data_url).play(); }
+  catch { toast('TTS failed', true); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = '🔊'; } }
+}
+function actBtn(label, fn) { return el('button', { class: 'act-btn', onclick: fn }, label); }
+function msgActions(m) {
+  const text = msgText(m);
+  const row = el('div', { class: 'msg-actions' });
+  if (text) row.append(actBtn('Copy', () => { navigator.clipboard?.writeText(text); toast('Copied'); }));
+  if (m.role === 'assistant') {
+    if (text) { const sb = actBtn('🔊', () => playTTS(text, sb)); row.append(sb); }
+    row.append(actBtn('↻ Retry', () => {
+      if (chatState.streaming) return;
+      const i = chatState.messages.indexOf(m);
+      if (i >= 0) { chatState.messages.splice(i); setView('chat'); sendChat({ regen: true }); }
+    }));
+  } else if (text) {
+    row.append(actBtn('Edit', () => {
+      if (chatState.streaming) return;
+      const i = chatState.messages.indexOf(m);
+      if (i >= 0) { chatState.messages.splice(i); setView('chat'); const ta = $('#chat-input'); if (ta) { ta.value = text; ta.focus(); ta.dispatchEvent(new Event('input')); } }
+    }));
+  }
+  return row;
+}
 function renderMessage(m) {
   const isUser = m.role === 'user';
   const box = el('div', { class: 'msg ' + (isUser ? 'user' : 'bot') });
-  const text = typeof m.content === 'string' ? m.content
-    : (m.content || []).filter(p => p.type === 'text').map(p => p.text).join('\n');
+  const text = msgText(m);
   (m.media || []).forEach(med => {
     if (med.kind === 'image') box.append(el('img', { class: 'msg-img', src: med.url }));
     else if (med.kind === 'video') box.append(el('div', { class: 'msg-video' }, el('img', { class: 'msg-img', src: med.url }), el('span', { class: 'att-badge' }, '▶ video')));
+    else if (med.kind === 'doc') box.append(el('div', { class: 'doc-chip' }, '📄 ' + (med.name || 'file')));
     else if (med.kind === 'audio') {
       const a = new Audio(med.url);
       box.append(el('button', { class: 'voice-bubble', onclick: () => { a.currentTime = 0; a.play(); } }, '▶ Voice note'));
@@ -288,77 +364,68 @@ function renderMessage(m) {
     if (isUser) box.append(el('div', {}, text));
     else box.append(el('div', { class: 'bot-text', html: mdLite(text) }));
   }
-  if (!isUser && text) box.append(speakBtn(text));
+  box.append(msgActions(m));
   return box;
 }
 
-function speakBtn(text) {
-  const b = el('button', { class: 'speak-btn', title: 'Play aloud' }, '🔊');
-  b.addEventListener('click', async () => {
-    b.disabled = true; b.textContent = '…';
-    try {
-      const r = await apiPOST('/audio/speak', { text });
-      if (r.data_url) { const a = new Audio(r.data_url); a.play(); }
-    } catch { toast('TTS failed', true); }
-    finally { b.disabled = false; b.textContent = '🔊'; }
-  });
-  return b;
-}
-
 // ----- send -----
-async function sendChat(voice) {
+async function sendChat(opts = {}) {
   if (chatState.streaming) return;
+  const regen = !!opts.regen;
   const ta = $('#chat-input');
-  const text = voice ? voice.text : (ta ? ta.value.trim() : '');
-  const atts = voice ? [] : chatState.atts.slice();
-  const media = voice ? voice.media : [];
-  if (!text && !atts.length) return;
   const log = $('#chat-log');
   $('.empty', log)?.remove();
-  if (ta && !voice) { ta.value = ''; ta.style.height = 'auto'; }
 
-  // build API content
-  let content;
-  const imgParts = [];
-  atts.forEach(a => {
-    if (a.kind === 'image') imgParts.push({ type: 'image_url', image_url: { url: a.url } });
-    else if (a.kind === 'video') a.frames.forEach(f => imgParts.push({ type: 'image_url', image_url: { url: f } }));
-  });
-  if (imgParts.length) {
-    const parts = [];
-    const hasVideo = atts.some(a => a.kind === 'video');
-    parts.push({ type: 'text', text: text || (hasVideo ? 'Here is a video (sampled frames).' : 'Here is an image.') });
-    parts.push(...imgParts);
-    content = parts;
-  } else content = text;
+  if (!regen) {
+    const text = opts.text != null ? opts.text : (ta ? ta.value.trim() : '');
+    const atts = opts.text != null ? [] : chatState.atts.slice();
+    const media = opts.media || [];
+    if (!text && !atts.length) return;
+    if (ta && opts.text == null) { ta.value = ''; ta.style.height = 'auto'; }
 
-  // display media: thumbnails for images, video thumb; voice bubble
-  const dispMedia = voice ? media : atts.map(a => ({ kind: a.kind, url: a.url }));
-  const userMsg = { role: 'user', content, media: dispMedia };
-  chatState.messages.push(userMsg);
-  log.append(renderMessage(userMsg));
-  chatState.atts = []; renderAttTray();
+    // build content: docs as fenced text, images/video frames as image parts
+    const docs = atts.filter(a => a.kind === 'doc');
+    const docText = docs.map(d => `[file: ${d.name}]\n\`\`\`\n${d.text}\n\`\`\``).join('\n\n');
+    const combined = [docText, text].filter(Boolean).join('\n\n');
+    const imgParts = [];
+    atts.forEach(a => {
+      if (a.kind === 'image') imgParts.push({ type: 'image_url', image_url: { url: a.url } });
+      else if (a.kind === 'video') a.frames.forEach(f => imgParts.push({ type: 'image_url', image_url: { url: f } }));
+    });
+    let content;
+    if (imgParts.length) {
+      const hasVideo = atts.some(a => a.kind === 'video');
+      content = [{ type: 'text', text: combined || (hasVideo ? 'Here is a video (sampled frames).' : 'Here is an image.') }, ...imgParts];
+    } else content = combined;
+
+    const dispMedia = media.slice();
+    atts.forEach(a => dispMedia.push(a.kind === 'doc' ? { kind: 'doc', name: a.name } : { kind: a.kind, url: a.url }));
+    const userMsg = { role: 'user', content, media: dispMedia };
+    chatState.messages.push(userMsg);
+    log.append(renderMessage(userMsg));
+    chatState.atts = []; renderAttTray();
+  }
   log.scrollTop = log.scrollHeight;
 
   chatState.streaming = true;
-  const botMsg = { role: 'assistant', content: '' };
-  const botEl = renderMessage(botMsg);
+  const sendBtn = $('#chat-send'); if (sendBtn) { sendBtn.classList.add('stop'); sendBtn.textContent = '■'; }
+  chatState.abort = new AbortController();
   const botText = el('div', { class: 'bot-text' });
   const typing = el('div', { class: 'typing' }, '…');
   log.append(typing); log.scrollTop = log.scrollHeight;
 
-  let acc = '';
+  let acc = ''; let shell = null; let aborted = false;
   try {
     const apiMessages = chatState.messages.map(m => ({ role: m.role, content: m.content }));
     const r = await fetch('/__chat', {
       method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ messages: apiMessages, stream: true }),
+      body: JSON.stringify({ messages: apiMessages, stream: true }), signal: chatState.abort.signal,
     });
     if (r.status === 401) { showLogin(); return; }
     if (!r.ok) throw new Error('gateway ' + r.status);
     typing.remove();
-    const shell = el('div', { class: 'msg bot' });
-    const toolSteps = el('div', { class: 'tool-steps' });  // shows the agent's tool calls live
+    shell = el('div', { class: 'msg bot' });
+    const toolSteps = el('div', { class: 'tool-steps' });  // live tool-call activity
     shell.append(toolSteps, botText);
     log.append(shell);
     const stepEls = {};
@@ -373,10 +440,7 @@ async function sendChat(voice) {
         stepEls[p.toolCallId || ('s' + toolSteps.children.length)] = s;
         toolSteps.append(s);
       }
-      if (p.status === 'completed' || p.status === 'error') {
-        s.classList.remove('running');
-        s.classList.add(p.status === 'error' ? 'err' : 'done');
-      }
+      if (p.status === 'completed' || p.status === 'error') { s.classList.remove('running'); s.classList.add(p.status === 'error' ? 'err' : 'done'); }
       log.scrollTop = log.scrollHeight;
     };
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = '';
@@ -391,20 +455,24 @@ async function sendChat(voice) {
         if (t.startsWith('event:')) { curEvent = t.slice(6).trim(); continue; }
         if (!t.startsWith('data:')) continue;
         const data = t.slice(5).trim(); if (data === '[DONE]') continue;
-        if (curEvent === 'hermes.tool.progress') {
-          try { handleTool(JSON.parse(data)); } catch {}
-        } else {
-          try { const j = JSON.parse(data); const d = j.choices?.[0]?.delta?.content; if (d) { acc += d; botText.innerHTML = mdLite(acc); log.scrollTop = log.scrollHeight; } } catch {}
-        }
+        if (curEvent === 'hermes.tool.progress') { try { handleTool(JSON.parse(data)); } catch {} }
+        else { try { const j = JSON.parse(data); const d = j.choices?.[0]?.delta?.content; if (d) { acc += d; botText.innerHTML = mdLite(acc); log.scrollTop = log.scrollHeight; } } catch {} }
       }
     }
-    if (acc) shell.append(speakBtn(acc));
   } catch (e) {
-    typing.remove();
-    log.append(el('div', { class: 'msg bot', html: mdLite('⚠️ ' + (e.message || 'error')) }));
+    if (e.name === 'AbortError') aborted = true;
+    else log.append(el('div', { class: 'msg bot', html: mdLite('⚠️ ' + (e.message || 'error')) }));
   } finally {
-    chatState.streaming = false;
-    if (acc) chatState.messages.push({ role: 'assistant', content: acc });
+    chatState.streaming = false; chatState.abort = null;
+    const sb = $('#chat-send'); if (sb) { sb.classList.remove('stop'); sb.textContent = '↑'; }
+    typing.remove();
+    if (acc) {
+      if (aborted) botText.innerHTML = mdLite(acc + '\n\n_(stopped)_');
+      const am = { role: 'assistant', content: acc };
+      chatState.messages.push(am);
+      if (shell) shell.append(msgActions(am));
+      if (chatState.autoSpeak && !aborted) playTTS(acc);
+    } else if (shell) { shell.remove(); }
     log.scrollTop = log.scrollHeight;
   }
 }

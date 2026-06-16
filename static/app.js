@@ -113,8 +113,11 @@ function mdBlock(escaped) {
 // ---------- View routing ----------
 const TITLES = { chat: 'Chat', status: 'Status', ops: 'Ops', settings: 'Settings', more: 'More' };
 let currentView = 'chat';
+let viewPoll = null;            // active auto-refresh interval for the current view
+let metricsHistory = [];        // rolling {cpu, mem} samples for the Status sparkline
 
 function setView(name) {
+  if (viewPoll) { clearInterval(viewPoll); viewPoll = null; }
   currentView = name;
   $('#view-title').textContent = TITLES[name] || 'Hermes';
   $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === name));
@@ -480,65 +483,76 @@ async function sendChat(opts = {}) {
 // ---------- STATUS ----------
 async function viewStatus(v) {
   loading(v);
-  try {
-    const [st, sys, mem] = await Promise.all([
-      apiGET('/status').catch(() => null),
-      apiGET('/system/stats').catch(() => null),
-      apiGET('/memory').catch(() => null),
-    ]);
-    v.innerHTML = '';
+  let st, mem;
+  try { [st, mem] = await Promise.all([apiGET('/status').catch(() => null), apiGET('/memory').catch(() => null)]); }
+  catch (e) { v.innerHTML = ''; v.append(errCard(e)); return; }
+  v.innerHTML = '';
 
-    const gwState = st?.gateway_state || 'unknown';
-    setStatusDot(gwState === 'running' ? 'good' : 'bad');
+  const gwState = st?.gateway_state || 'unknown';
+  setStatusDot(gwState === 'running' ? 'good' : 'bad');
+  v.append(el('div', { class: 'stat-grid' },
+    stat('Gateway', gwState, gwState === 'running' ? 'good' : 'bad'),
+    stat('Active sessions', st?.active_sessions ?? '—')));
 
-    v.append(el('div', { class: 'stat-grid' },
-      stat('Gateway', gwState, gwState === 'running' ? 'good' : 'bad'),
-      stat('Active sessions', st?.active_sessions ?? '—'),
-    ));
-
-    // platforms
-    const plats = st?.gateway_platforms || {};
-    const pcard = el('div', { class: 'card' }, el('h2', {}, 'Channels'));
-    if (Object.keys(plats).length) {
-      for (const [name, info] of Object.entries(plats)) {
-        const ok = info.state === 'connected';
-        pcard.append(el('div', { class: 'row' },
-          el('span', { class: 'k' }, name),
-          el('span', { class: 'pill ' + (ok ? 'good' : 'bad') }, info.state + (info.error_message ? ' · ' + info.error_message : ''))));
-      }
-    } else pcard.append(el('div', { class: 'muted' }, 'No channel data'));
-    v.append(pcard);
-
-    // version / paths
-    v.append(card('System', [
-      ['Version', st?.version], ['Released', st?.release_date],
-      ['Config version', (st?.config_version) + ' / ' + (st?.latest_config_version)],
-      ['Hermes home', st?.hermes_home], ['Gateway PID', st?.gateway_pid],
-    ]));
-
-    if (sys) {
-      const rows = [];
-      const cpu = sys.cpu_percent ?? sys.cpu;
-      const m = sys.memory || sys.mem || {};
-      if (cpu != null) rows.push(['CPU', (typeof cpu === 'number' ? cpu.toFixed(0) + '%' : cpu)]);
-      if (m.percent != null) rows.push(['Memory', m.percent + '%']);
-      if (m.used != null) rows.push(['Mem used', fmtBytes(m.used) + (m.total ? ' / ' + fmtBytes(m.total) : '')]);
-      const disk = sys.disk || {};
-      if (disk.percent != null) rows.push(['Disk', disk.percent + '%']);
-      if (sys.uptime != null) rows.push(['Uptime', typeof sys.uptime === 'number' ? Math.floor(sys.uptime / 3600) + 'h' : sys.uptime]);
-      if (rows.length) v.append(card('Host', rows));
-      else v.append(dumpCard('Host stats', sys));
+  const plats = st?.gateway_platforms || {};
+  const pcard = el('div', { class: 'card' }, el('h2', {}, 'Channels'));
+  if (Object.keys(plats).length) {
+    for (const [name, info] of Object.entries(plats)) {
+      const ok = info.state === 'connected';
+      pcard.append(el('div', { class: 'row' }, el('span', { class: 'k' }, name),
+        el('span', { class: 'pill ' + (ok ? 'good' : 'bad') }, info.state + (info.error_message ? ' · ' + info.error_message : ''))));
     }
+  } else pcard.append(el('div', { class: 'muted' }, 'No channel data'));
+  v.append(pcard);
 
-    if (mem) {
-      const provider = mem.provider || mem.backend || mem.type;
-      v.append(card('Long-term memory', [
-        ['Provider', provider], ['Status', mem.status || mem.state || (mem.healthy ? 'healthy' : '')],
-        ['Records', mem.count ?? mem.records ?? mem.total],
-      ]));
-    }
-  } catch (e) { v.innerHTML = ''; v.append(errCard(e)); }
+  // live host metrics (auto-refresh every 3s while on this view)
+  const hostCard = el('div', { class: 'card' }, el('h2', {}, 'Host · live'));
+  const hostBody = el('div', { id: 'host-metrics' }, el('div', { class: 'spinner' }));
+  hostCard.append(hostBody); v.append(hostCard);
+
+  v.append(card('System', [
+    ['Version', st?.version], ['Released', st?.release_date],
+    ['Config version', (st?.config_version) + ' / ' + (st?.latest_config_version)],
+    ['Hermes home', st?.hermes_home], ['Gateway PID', st?.gateway_pid]]));
+  if (mem) v.append(card('Long-term memory', [['Provider', mem.active || mem.provider], ['Providers', (mem.providers || []).length || null]]));
+
+  const refresh = async () => {
+    const sys = await apiGET('/system/stats').catch(() => null);
+    if (!sys || currentView !== 'status') return;
+    metricsHistory.push({ cpu: sys.cpu_percent ?? 0, mem: sys.memory?.percent ?? 0 });
+    if (metricsHistory.length > 40) metricsHistory.shift();
+    renderHostMetrics(hostBody, sys);
+  };
+  await refresh();
+  viewPoll = setInterval(refresh, 3000);
 }
+
+function gauge(label, pct, detail) {
+  pct = Math.max(0, Math.min(100, pct || 0));
+  const cls = pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : 'good';
+  return el('div', { class: 'gauge' },
+    el('div', { class: 'gauge-top' }, el('span', {}, label), el('span', { class: 'muted' }, detail)),
+    el('div', { class: 'gauge-track' }, el('div', { class: 'gauge-fill ' + cls, style: 'width:' + pct + '%' })));
+}
+function sparkline(vals, max = 100) {
+  const w = 280, h = 40, n = vals.length;
+  if (!n) return el('div');
+  const pts = vals.map((val, i) => `${(i / Math.max(1, n - 1) * w).toFixed(1)},${(h - Math.min(max, val) / max * h).toFixed(1)}`).join(' ');
+  return el('div', { class: 'spark', html: `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:42px"><polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>` });
+}
+function renderHostMetrics(container, sys) {
+  container.innerHTML = '';
+  const m = sys.memory || {}, d = sys.disk || {};
+  container.append(gauge('CPU', sys.cpu_percent, (sys.cpu_percent ?? 0).toFixed(0) + '% · ' + (sys.cpu_count || '?') + ' cores'));
+  container.append(gauge('Memory', m.percent, fmtBytes(m.used) + ' / ' + fmtBytes(m.total)));
+  container.append(gauge('Disk', d.percent, fmtBytes(d.used) + ' / ' + fmtBytes(d.total)));
+  const la = (sys.load_avg || []).map(x => (+x).toFixed(2)).join('  ');
+  if (la) container.append(el('div', { class: 'row' }, el('span', { class: 'k' }, 'Load avg'), el('span', { class: 'v' }, la)));
+  if (sys.uptime_seconds != null) container.append(el('div', { class: 'row' }, el('span', { class: 'k' }, 'Uptime'), el('span', { class: 'v' }, fmtDur(sys.uptime_seconds))));
+  container.append(el('div', { class: 'spark-label muted' }, 'CPU history'));
+  container.append(sparkline(metricsHistory.map(x => x.cpu)));
+}
+function fmtDur(s) { s = Math.floor(s); const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), mn = Math.floor(s % 3600 / 60); return (d ? d + 'd ' : '') + (h ? h + 'h ' : '') + mn + 'm'; }
 
 function setStatusDot(cls) { const d = $('#status-dot'); d.className = 'dot ' + cls; }
 function stat(label, value, cls) {
@@ -693,9 +707,32 @@ async function opsMaint(body) {
 
   // logs
   body.append(el('div', { class: 'card' }, el('h2', {}, 'Logs'),
-    el('button', { class: 'btn block', onclick: async () => {
-      try { const l = await apiGET('/logs?lines=200'); showResult('Logs', l); } catch (e) { toast(e.message, true); }
-    } }, 'View recent logs')));
+    el('button', { class: 'btn block', onclick: openLiveLogs }, '📜 Live logs (auto-tail)')));
+}
+
+async function openLiveLogs() {
+  if (viewPoll) { clearInterval(viewPoll); viewPoll = null; }
+  const v = $('#view'); v.innerHTML = '';
+  v.append(el('button', { class: 'btn', style: 'margin-bottom:10px', onclick: () => setView('ops') }, '‹ Back'));
+  let paused = false;
+  const pauseBtn = el('button', { class: 'btn', onclick: () => { paused = !paused; pauseBtn.textContent = paused ? '▶ Resume' : '⏸ Pause'; } }, '⏸ Pause');
+  const head = el('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px' },
+    el('h2', { style: 'margin:0' }, 'Live logs'), pauseBtn);
+  v.append(head);
+  const pre = el('pre', { style: 'max-height:62vh;overflow:auto;font-size:11px' }, 'loading…');
+  v.append(el('div', { class: 'card', style: 'padding:8px' }, pre));
+  const tick = async () => {
+    if (paused) return;
+    try {
+      const l = await apiGET('/logs?lines=400');
+      const lines = l.lines || (Array.isArray(l) ? l : []);
+      const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 30;
+      pre.textContent = Array.isArray(lines) ? lines.join('') : String(lines);
+      if (atBottom) pre.scrollTop = pre.scrollHeight;
+    } catch {}
+  };
+  await tick(); pre.scrollTop = pre.scrollHeight;
+  viewPoll = setInterval(tick, 3000);
 }
 
 function showResult(title, data) {
@@ -964,17 +1001,39 @@ async function setNotify(body) {
 }
 
 // ---------- MORE ----------
+function fmtNum(n) { n = +n || 0; if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B'; if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k'; return '' + n; }
 async function viewMore(v) {
   loading(v);
-  try {
-    // usage analytics
-    const usage = await apiGET('/analytics/usage').catch(() => null);
-    v.innerHTML = '';
-    if (usage) v.append(dumpCard('Usage', usage));
-    // session stats
-    const ss = await apiGET('/sessions/stats').catch(() => null);
-    if (ss) v.append(dumpCard('Session stats', ss));
-  } catch (e) { v.innerHTML = ''; v.append(errCard(e)); }
+  let usage, models;
+  try { [usage, models] = await Promise.all([apiGET('/analytics/usage').catch(() => null), apiGET('/analytics/models').catch(() => null)]); }
+  catch (e) { v.innerHTML = ''; v.append(errCard(e)); }
+  v.innerHTML = '';
+
+  if (usage && usage.daily && usage.daily.length) {
+    const daily = usage.daily.slice(-14);
+    const tIn = usage.daily.reduce((s, d) => s + (d.input_tokens || 0), 0);
+    const tOut = usage.daily.reduce((s, d) => s + (d.output_tokens || 0), 0);
+    const tCost = usage.daily.reduce((s, d) => s + (d.estimated_cost || 0), 0);
+    const max = Math.max(1, ...daily.map(d => (d.input_tokens || 0) + (d.output_tokens || 0)));
+    const c = el('div', { class: 'card' }, el('h2', {}, 'Usage · last ' + daily.length + ' days'));
+    const chart = el('div', { class: 'bars' });
+    daily.forEach(d => {
+      const tot = (d.input_tokens || 0) + (d.output_tokens || 0);
+      chart.append(el('div', { class: 'bar-col', title: `${d.day}: ${fmtNum(tot)} tokens · $${(d.estimated_cost || 0).toFixed(3)} · ${d.api_calls || 0} calls` },
+        el('div', { class: 'bar-wrap' }, el('div', { class: 'bar', style: 'height:' + Math.max(2, tot / max * 100) + '%' })),
+        el('div', { class: 'bar-lbl' }, d.day.slice(5))));
+    });
+    c.append(chart);
+    c.append(card('', [['Total tokens', fmtNum(tIn + tOut)], ['Input', fmtNum(tIn)], ['Output', fmtNum(tOut)], ['Est. cost', '$' + tCost.toFixed(2)]]));
+    v.append(c);
+  }
+  if (models && models.models && models.models.length) {
+    const c = el('div', { class: 'card' }, el('h2', {}, 'By model'));
+    models.models.slice(0, 12).forEach(m => c.append(el('div', { class: 'list-item' },
+      el('div', { class: 'mr-name' }, (m.model || '?') + ' · ' + (m.provider || '')),
+      el('div', { class: 'mr-desc' }, `${m.sessions || 0} sessions · ${m.api_calls || 0} calls · ${m.tool_calls || 0} tools · ${fmtNum((m.input_tokens || 0) + (m.output_tokens || 0))} tok`))));
+    v.append(c);
+  }
 
   const links = el('div', { class: 'card' }, el('h2', {}, 'More'));
   [

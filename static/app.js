@@ -784,7 +784,26 @@ const SETTINGS_CATS = [
   ['config', '📄', 'Config', 'Raw config.yaml', () => setConfig],
   ['curator', '🗂️', 'Curator', 'Memory maintenance', () => setCurator],
   ['notify', '🔔', 'Notifications', 'Push alerts', () => setNotify],
+  ['appearance', '🎨', 'Appearance', 'Theme', () => setAppearance],
 ];
+
+function applyTheme(name) {
+  if (name && name !== 'midnight') document.documentElement.dataset.theme = name;
+  else delete document.documentElement.dataset.theme;
+  try { localStorage.setItem('hc_theme', name || ''); } catch {}
+}
+async function setAppearance(body) {
+  body.innerHTML = '';
+  const cur = (() => { try { return localStorage.getItem('hc_theme') || 'midnight'; } catch { return 'midnight'; } })();
+  const themes = [['midnight', 'Midnight (default)'], ['dim', 'Dim'], ['light', 'Light']];
+  const c = el('div', { class: 'card' }, el('h2', {}, 'Theme'));
+  themes.forEach(([id, label]) => {
+    c.append(el('div', { class: 'row', onclick: () => { applyTheme(id); reSettings(); } },
+      el('span', { class: 'k', style: 'color:var(--text)' }, label),
+      el('span', { class: 'pill ' + ((cur === id || (id === 'midnight' && !cur)) ? 'good' : '') }, (cur === id ? '✓' : 'set'))));
+  });
+  body.append(c);
+}
 
 async function setProfiles(body) {
   const [data, active] = await Promise.all([apiGET('/profiles'), apiGET('/profiles/active').catch(() => ({}))]);
@@ -1288,7 +1307,16 @@ function boot() {
   $$('.tab').forEach(t => t.addEventListener('click', () => { if (t.dataset.view === 'settings') settingsDetail = null; setView(t.dataset.view); }));
   $('#refresh-btn').addEventListener('click', () => setView(currentView));
   setupViewport();
-  setView('chat');
+  // app-shortcut deep links (?view=) and share-target (?text/title/url)
+  const params = new URLSearchParams(location.search);
+  const want = params.get('view');
+  setView(['chat', 'status', 'ops', 'settings', 'more'].includes(want) ? want : 'chat');
+  const shared = [params.get('title'), params.get('text'), params.get('url')].filter(Boolean).join(' ').trim();
+  if (shared) {
+    setView('chat');
+    setTimeout(() => { const ta = $('#chat-input'); if (ta) { ta.value = shared; ta.dispatchEvent(new Event('input')); ta.focus(); } }, 120);
+  }
+  if (location.search) { try { history.replaceState(null, '', location.pathname); } catch {} }
 }
 
 $('#login-btn').addEventListener('click', doLogin);

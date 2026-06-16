@@ -15,6 +15,13 @@
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
 }
+html[data-theme="light"] {
+  --bg: #f4f6fb; --bg-elev: #ffffff; --bg-elev2: #eceff5; --line: #d7dce6;
+  --text: #14181f; --muted: #5b667a; --accent: #2f6fed; --accent2: #7b52e0;
+}
+html[data-theme="dim"] {
+  --bg: #161a22; --bg-elev: #1d222c; --bg-elev2: #262d3a; --line: #313a4a; --text: #e8ecf4; --muted: #93a0b5;
+}
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; }
 body {

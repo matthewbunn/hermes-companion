@@ -184,7 +184,9 @@ function runChatCommand(line) {
   const args = m[2];
   const ta = $('#chat-input'); if (ta) { ta.value = ''; ta.style.height = 'auto'; }
   hidePalette();
-  if (cmd.agent) sendChat({ text: '/' + cmd.c + (args ? ' ' + args : '') });
+  // Agent-runtime commands aren't processed by the OpenAI gateway (it would just
+  // role-play a reply), so be honest rather than fake it.
+  if (cmd.agent) toast('/' + cmd.c + ' is a Telegram-only command — not available in app chat', true);
   else cmd.run(args);
   return true;
 }
@@ -198,14 +200,14 @@ function renderPalette(val) {
   p.innerHTML = ''; p.style.display = 'block';
   matches.slice(0, 8).forEach(x => p.append(el('div', { class: 'cmd-item', onclick: () => {
     const ta = $('#chat-input'); if (ta) { ta.value = '/' + x.c + ' '; ta.focus(); ta.dispatchEvent(new Event('input')); }
-  } }, el('span', { class: 'cmd-name' }, '/' + x.c), el('span', { class: 'cmd-desc' }, x.d + (x.agent ? ' ›agent' : '')))));
+  } }, el('span', { class: 'cmd-name' }, '/' + x.c), el('span', { class: 'cmd-desc' }, x.d + (x.agent ? ' · Telegram-only' : '')))));
 }
 function showCommandHelp() {
   const v = $('#view'); v.innerHTML = '';
   v.append(el('button', { class: 'btn', style: 'margin-bottom:10px', onclick: () => setView('chat') }, '‹ Back'));
   const c = el('div', { class: 'card' }, el('h2', {}, 'Commands (Telegram parity)'));
   chatCommands().forEach(x => c.append(el('div', { class: 'list-item' },
-    el('div', { class: 'mr-name' }, '/' + x.c), el('div', { class: 'mr-desc' }, x.d + (x.agent ? ' · sent to the agent' : '')))));
+    el('div', { class: 'mr-name' }, '/' + x.c), el('div', { class: 'mr-desc' }, x.d + (x.agent ? ' · Telegram-only (use the Telegram bot)' : '')))));
   v.append(c);
 }
 const TEXT_FILE_RE = /\.(txt|md|markdown|csv|tsv|json|ya?ml|log|py|js|ts|jsx|tsx|html|css|scss|sh|bash|c|cpp|cc|h|hpp|java|go|rs|rb|php|sql|xml|toml|ini|conf|env|kt|swift|r|lua|pl)$/i;

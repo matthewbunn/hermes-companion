@@ -1,5 +1,5 @@
 /* Hermes Companion service worker */
-const CACHE = 'hermes-shell-v11';
+const CACHE = 'hermes-shell-v12';
 const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest',
   '/icons/icon-192.png', '/icons/apple-touch-icon.png'];
 
@@ -21,16 +21,24 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  // never cache API/auth/chat/push — always go to network
+  if (url.origin !== location.origin) return;
   if (url.pathname.startsWith('/api') || url.pathname.startsWith('/__') || e.request.method !== 'GET') return;
+  const isAsset = /\.(png|ico|jpg|jpeg|svg)$/.test(url.pathname);
+  if (isAsset) {
+    // static icons: cache-first (rarely change)
+    e.respondWith(caches.match(e.request).then((c) => c || fetch(e.request).then((res) => {
+      if (res.ok) { const cp = res.clone(); caches.open(CACHE).then((cc) => cc.put(e.request, cp)); }
+      return res;
+    })));
+    return;
+  }
+  // app shell (/, index.html, app.js, styles.css, manifest): NETWORK-FIRST so updates
+  // land on the next launch whenever online; fall back to cache only when offline.
   e.respondWith(
-    caches.match(e.request).then((cached) =>
-      cached || fetch(e.request).then((res) => {
-        if (res.ok && url.origin === location.origin) {
-          const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy));
-        }
-        return res;
-      }).catch(() => cached))
+    fetch(e.request).then((res) => {
+      if (res.ok) { const cp = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, cp)); }
+      return res;
+    }).catch(() => caches.match(e.request).then((c) => c || caches.match('/index.html')))
   );
 });
 

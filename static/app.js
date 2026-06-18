@@ -141,6 +141,73 @@ function loadChat() {
   try { const s = localStorage.getItem('hc_chat'); if (s) { const m = JSON.parse(s); if (Array.isArray(m)) chatState.messages = m; } } catch {}
 }
 function newChat() { chatState.messages = []; saveChat(); setView('chat'); }
+
+// ----- Telegram-parity slash commands -----
+function chatCommands() {
+  return [
+    { c: 'new', d: 'Start a new session (clear chat)', run: () => newChat() },
+    { c: 'retry', d: 'Retry the last reply', run: () => { const i = chatState.messages.map(m => m.role).lastIndexOf('assistant'); if (i >= 0) { chatState.messages.splice(i); setView('chat'); sendChat({ regen: true }); } else toast('Nothing to retry', true); } },
+    { c: 'undo', d: 'Back up a turn and re-prompt', run: () => { while (chatState.messages.length && chatState.messages.at(-1).role === 'assistant') chatState.messages.pop(); const u = chatState.messages.pop(); saveChat(); setView('chat'); const ta = $('#chat-input'); if (ta && u) { ta.value = msgText(u); ta.dispatchEvent(new Event('input')); ta.focus(); } } },
+    { c: 'stop', d: 'Stop the running response', run: () => { if (chatState.abort) chatState.abort.abort(); else toast('Not generating'); } },
+    { c: 'status', d: 'Session & gateway info', run: () => setView('status') },
+    { c: 'usage', d: 'Token usage & analytics', run: () => setView('more') },
+    { c: 'sessions', d: 'Browse & resume past sessions', run: () => { opsTab = 'sessions'; setView('ops'); } },
+    { c: 'resume', d: 'Resume a previous session', run: () => { opsTab = 'sessions'; setView('ops'); } },
+    { c: 'model', d: 'Switch model for this session', run: () => { settingsDetail = 'models'; setView('settings'); } },
+    { c: 'reasoning', d: 'Reasoning effort & display', run: () => { settingsDetail = 'models'; setView('settings'); } },
+    { c: 'platform', d: 'Pause/resume/list channels', run: () => { settingsDetail = 'channels'; setView('settings'); } },
+    { c: 'profile', d: 'Active profile', run: () => { settingsDetail = 'profiles'; setView('settings'); } },
+    { c: 'agents', d: 'Active agents & tasks', run: () => openKanban() },
+    { c: 'rollback', d: 'List/restore checkpoints', run: async () => { try { showResult('Checkpoints', await apiGET('/ops/checkpoints')); } catch (e) { toast(e.message, true); } } },
+    { c: 'restart', d: 'Restart the gateway', run: () => confirmAct('/gateway/restart', 'Restart the gateway?', 'Restarting') },
+    { c: 'update', d: 'Update Hermes Agent', run: async () => { if (!confirm('Update Hermes now?')) return; try { await apiPOST('/hermes/update'); toast('Update started'); } catch (e) { toast(e.message, true); } } },
+    { c: 'debug', d: 'Upload a debug report', run: async () => { toast('Generating debug report…'); try { showResult('Debug report', await apiPOST('/ops/debug-share')); } catch (e) { toast(e.message, true); } } },
+    { c: 'help', d: 'Show all commands', run: () => showCommandHelp() },
+    { c: 'commands', d: 'Browse all commands', run: () => showCommandHelp() },
+    // sent to Hermes as a message (agent-handled)
+    { c: 'queue', d: 'Queue a prompt for the next turn', agent: true },
+    { c: 'steer', d: 'Inject a message after the next tool call', agent: true },
+    { c: 'background', d: 'Run a prompt in the background', agent: true },
+    { c: 'branch', d: 'Branch the current session', agent: true },
+    { c: 'compress', d: 'Compress conversation context', agent: true },
+    { c: 'title', d: 'Set a title for the session', agent: true },
+    { c: 'whoami', d: 'Show your access level', agent: true },
+    { c: 'approve', d: 'Approve a pending command', agent: true },
+    { c: 'deny', d: 'Deny a pending command', agent: true },
+  ];
+}
+function runChatCommand(line) {
+  const m = line.trim().match(/^\/(\w+)\s*([\s\S]*)$/);
+  if (!m) return false;
+  const cmd = chatCommands().find(x => x.c === m[1].toLowerCase());
+  if (!cmd) return false;
+  const args = m[2];
+  const ta = $('#chat-input'); if (ta) { ta.value = ''; ta.style.height = 'auto'; }
+  hidePalette();
+  if (cmd.agent) sendChat({ text: '/' + cmd.c + (args ? ' ' + args : '') });
+  else cmd.run(args);
+  return true;
+}
+function hidePalette() { const p = $('#cmd-palette'); if (p) p.style.display = 'none'; }
+function renderPalette(val) {
+  const p = $('#cmd-palette'); if (!p) return;
+  if (!val.startsWith('/')) { p.style.display = 'none'; return; }
+  const q = val.slice(1).toLowerCase().split(' ')[0];
+  const matches = chatCommands().filter(x => x.c.startsWith(q));
+  if (!matches.length) { p.style.display = 'none'; return; }
+  p.innerHTML = ''; p.style.display = 'block';
+  matches.slice(0, 8).forEach(x => p.append(el('div', { class: 'cmd-item', onclick: () => {
+    const ta = $('#chat-input'); if (ta) { ta.value = '/' + x.c + ' '; ta.focus(); ta.dispatchEvent(new Event('input')); }
+  } }, el('span', { class: 'cmd-name' }, '/' + x.c), el('span', { class: 'cmd-desc' }, x.d + (x.agent ? ' ›agent' : '')))));
+}
+function showCommandHelp() {
+  const v = $('#view'); v.innerHTML = '';
+  v.append(el('button', { class: 'btn', style: 'margin-bottom:10px', onclick: () => setView('chat') }, '‹ Back'));
+  const c = el('div', { class: 'card' }, el('h2', {}, 'Commands (Telegram parity)'));
+  chatCommands().forEach(x => c.append(el('div', { class: 'list-item' },
+    el('div', { class: 'mr-name' }, '/' + x.c), el('div', { class: 'mr-desc' }, x.d + (x.agent ? ' · sent to the agent' : '')))));
+  v.append(c);
+}
 const TEXT_FILE_RE = /\.(txt|md|markdown|csv|tsv|json|ya?ml|log|py|js|ts|jsx|tsx|html|css|scss|sh|bash|c|cpp|cc|h|hpp|java|go|rs|rb|php|sql|xml|toml|ini|conf|env|kt|swift|r|lua|pl)$/i;
 
 function viewChat(v) {
@@ -153,8 +220,9 @@ function viewChat(v) {
   const spkBtn = el('button', { class: 'comp-btn' + (chatState.autoSpeak ? ' active' : ''), id: 'spk-btn', title: 'Speak replies aloud' }, chatState.autoSpeak ? '🔊' : '🔈');
   const ta = el('textarea', { id: 'chat-input', rows: '1', placeholder: 'Message Hermes…', enterkeyhint: 'send' });
   const send = el('button', { class: 'send' + (chatState.streaming ? ' stop' : ''), id: 'chat-send' }, chatState.streaming ? '■' : '↑');
+  const palette = el('div', { class: 'cmd-palette', id: 'cmd-palette', style: 'display:none' });
   const composer = el('div', { class: 'composer' }, attBtn, micBtn, spkBtn, ta, send);
-  wrap.append(log, tray, composer, fileInput);
+  wrap.append(log, palette, tray, composer, fileInput);
   v.append(wrap);
 
   chatState.messages.forEach(m => log.append(renderMessage(m)));
@@ -168,8 +236,9 @@ function viewChat(v) {
     const b = e.target.closest('.code-copy');
     if (b) { const pre = b.parentElement.querySelector('pre'); navigator.clipboard?.writeText(pre.textContent); b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1200); }
   });
-  ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; });
-  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
+  ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; renderPalette(ta.value); });
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); const val = ta.value.trim(); if (val.startsWith('/') && runChatCommand(val)) return; sendChat(); } });
+  ta.addEventListener('blur', () => setTimeout(hidePalette, 200));
   send.addEventListener('click', () => { if (chatState.streaming) chatState.abort?.abort(); else sendChat(); });
   attBtn.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', onFilesPicked);
@@ -417,6 +486,7 @@ async function sendChat(opts = {}) {
     chatState.messages.push(userMsg);
     log.append(renderMessage(userMsg));
     chatState.atts = []; renderAttTray();
+    saveChat();
   }
   log.scrollTop = log.scrollHeight;
 
@@ -818,7 +888,7 @@ function applyTheme(name) {
 async function setAppearance(body) {
   body.innerHTML = '';
   const cur = (() => { try { return localStorage.getItem('hc_theme') || 'midnight'; } catch { return 'midnight'; } })();
-  const themes = [['midnight', 'Midnight (default)'], ['dim', 'Dim'], ['light', 'Light']];
+  const themes = [['midnight', 'Midnight (default)'], ['dim', 'Dim'], ['amoled', 'AMOLED black'], ['ocean', 'Ocean'], ['forest', 'Forest'], ['rose', 'Rose'], ['light', 'Light'], ['sand', 'Sand (light)']];
   const c = el('div', { class: 'card' }, el('h2', {}, 'Theme'));
   themes.forEach(([id, label]) => {
     c.append(el('div', { class: 'row', onclick: () => { applyTheme(id); reSettings(); } },
